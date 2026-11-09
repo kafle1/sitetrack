@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { pool, tx } from '../db';
 import { requireCompanyStore } from '../access';
 import { conflict, notFound } from '../errors';
-import { arr, errorBody, int, obj, ok, pageOf, pageQuery, paged, str } from '../schemas';
+import { arr, errorBody, idIn, int, obj, ok, pageOf, pageQuery, paged, str } from '../schemas';
 
 const material = obj({ id: int, name: str, category: str, unit: str });
 const body = {
@@ -51,7 +51,7 @@ export default async function materialRoutes(app: FastifyInstance) {
 
   app.get<{ Params: { id: number } }>(
     '/materials/:id',
-    { schema: { tags: ['materials'], summary: 'One material', params: obj({ id: int }), response: { 200: material, 404: errorBody } } },
+    { schema: { tags: ['materials'], summary: 'One material', params: obj({ id: idIn }), response: { 200: material, 404: errorBody } } },
     async (req) => {
       const { rows } = await pool.query('SELECT id, name, category, unit FROM materials WHERE id = $1', [req.params.id]);
       if (!rows[0]) throw notFound('Material not found');
@@ -90,7 +90,7 @@ export default async function materialRoutes(app: FastifyInstance) {
       schema: {
         tags: ['materials'],
         summary: 'Edit a material (company store managers and SuperAdmins)',
-        params: obj({ id: int }),
+        params: obj({ id: idIn }),
         body: { ...obj(body, []), minProperties: 1 },
         response: { 200: material, 403: errorBody, 404: errorBody },
       },
@@ -115,7 +115,7 @@ export default async function materialRoutes(app: FastifyInstance) {
         tags: ['materials'],
         summary: 'Remove a material (company store managers and SuperAdmins)',
         description: 'Refused with 409 once the material has any stock or delivery history.',
-        params: obj({ id: int }),
+        params: obj({ id: idIn }),
         response: { 200: ok, 403: errorBody, 404: errorBody, 409: errorBody },
       },
     },

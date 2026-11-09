@@ -4,7 +4,7 @@ import { pool, tx } from '../db';
 import { lockProject, projectAccess, projectAdmin } from '../access';
 import { conflict, forbidden, notFound } from '../errors';
 import { projectCode } from '../ids';
-import { arr, bool, dateTime, errorBody, int, nullable, obj, ok, pageOf, pageQuery, str, strEnum, userRef } from '../schemas';
+import { arr, bool, dateTime, errorBody, idIn, int, nullable, obj, ok, pageOf, pageQuery, str, strEnum, userRef } from '../schemas';
 
 const projectParams = obj({ projectId: { type: 'string', example: 'PRJ-0042' } });
 
@@ -98,7 +98,7 @@ export default async function memberRoutes(app: FastifyInstance) {
       schema: {
         tags: ['members'],
         summary: 'Withdraw an invitation that has not been answered (project admins)',
-        params: obj({ projectId: str, invitationId: int }),
+        params: obj({ projectId: str, invitationId: idIn }),
         response: { 200: membersResponse, 403: errorBody, 404: errorBody },
       },
     },
@@ -120,7 +120,7 @@ export default async function memberRoutes(app: FastifyInstance) {
         tags: ['members'],
         summary: 'Make a member a project admin, or take admin away (project admins)',
         description: 'Taking admin from the last project admin is refused with 409.',
-        params: obj({ projectId: str, userId: int }),
+        params: obj({ projectId: str, userId: idIn }),
         body: obj({ isAdmin: bool }),
         response: { 200: membersResponse, 403: errorBody, 404: errorBody, 409: errorBody },
       },
@@ -149,7 +149,7 @@ export default async function memberRoutes(app: FastifyInstance) {
         tags: ['members'],
         summary: 'Remove a member (project admins), or leave the project yourself',
         description: 'Removing the last project admin is refused with 409. The removed person loses access on their next request.',
-        params: obj({ projectId: str, userId: int }),
+        params: obj({ projectId: str, userId: idIn }),
         response: { 200: ok, 403: errorBody, 404: errorBody, 409: errorBody },
       },
     },
@@ -233,7 +233,7 @@ export default async function memberRoutes(app: FastifyInstance) {
       schema: {
         tags: ['notifications'],
         summary: 'Mark notifications as read: send { "ids": [...] } for some, or {} for all of them',
-        body: { type: 'object', properties: { ids: { type: 'array', items: int, maxItems: 500 } } },
+        body: { type: 'object', properties: { ids: { type: 'array', items: idIn, maxItems: 500 } } },
         response: { 200: obj({ unreadCount: int }) },
       },
     },
@@ -259,7 +259,7 @@ export default async function memberRoutes(app: FastifyInstance) {
           tags: ['notifications'],
           summary: answer === 'accept' ? 'Accept my invitation and join the project' : 'Reject my invitation',
           description: 'Only the invited person can answer. Anyone else gets 404.',
-          params: obj({ invitationId: int }),
+          params: obj({ invitationId: idIn }),
           response: { 200: ok, 404: errorBody, 409: errorBody },
         },
       },

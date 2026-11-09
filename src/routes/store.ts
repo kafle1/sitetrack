@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { pagedRows, pool } from '../db';
 import { projectAccess, requireCompanyStore } from '../access';
 import { notFound } from '../errors';
-import { dateTime, errorBody, int, nullable, num, obj, pageOf, pageQuery, paged, str, strEnum } from '../schemas';
+import { dateTime, errorBody, idIn, int, nullable, num, obj, pageOf, pageQuery, paged, str, strEnum } from '../schemas';
 import { likePattern } from './materials';
 
 const STOCK_STATUSES = ['out_of_stock', 'low_stock', 'available'];
@@ -116,7 +116,7 @@ export default async function storeRoutes(app: FastifyInstance) {
       schema: {
         tags: ['company store'],
         summary: 'Add stock that arrived from a supplier (company store managers and SuperAdmins)',
-        params: obj({ materialId: int }),
+        params: obj({ materialId: idIn }),
         body: obj({ quantity: { type: 'number', exclusiveMinimum: 0, maximum: 1e9 } }),
         response: { 200: stockResponse, 403: errorBody, 404: errorBody },
       },
@@ -140,7 +140,7 @@ export default async function storeRoutes(app: FastifyInstance) {
       schema: {
         tags: ['company store'],
         summary: 'Set the reorder point for a material (company store managers and SuperAdmins)',
-        params: obj({ materialId: int }),
+        params: obj({ materialId: idIn }),
         body: obj({ reorderPoint: { type: 'number', minimum: 0, maximum: 1e9 } }),
         response: { 200: stockResponse, 403: errorBody, 404: errorBody },
       },

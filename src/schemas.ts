@@ -2,6 +2,8 @@
 
 export const str = { type: 'string' } as const;
 export const int = { type: 'integer' } as const;
+// ids in paths and bodies; a number past Postgres integer range is a bad request, not a database error
+export const idIn = { type: 'integer', maximum: 2147483647 } as const;
 export const num = { type: 'number' } as const;
 export const bool = { type: 'boolean' } as const;
 export const date = { type: 'string', format: 'date', example: '2026-11-09' } as const;
@@ -13,7 +15,7 @@ export const obj = (properties: Record<string, object>, required: string[] = Obj
 export const strEnum = (values: string[]) => ({ type: 'string', enum: values }) as const;
 
 export const pageQuery = {
-  page: { type: 'integer', minimum: 1, default: 1 },
+  page: { type: 'integer', minimum: 1, maximum: 1000000, default: 1 },
   pageSize: { type: 'integer', minimum: 1, maximum: 200, default: 50 },
 };
 

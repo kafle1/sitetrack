@@ -4,7 +4,7 @@ import { canUseCompanyStore, projectAccess, requireCompanyStore } from '../acces
 import type { AuthUser } from '../auth';
 import { badRequest, conflict, forbidden, notFound } from '../errors';
 import { parseProjectId, projectCode, searchNumber } from '../ids';
-import { arr, date, dateTime, errorBody, int, nullable, num, obj, pageOf, pageQuery, paged, str, strEnum, userRef } from '../schemas';
+import { arr, date, dateTime, errorBody, idIn, int, nullable, num, obj, pageOf, pageQuery, paged, str, strEnum, userRef } from '../schemas';
 import { addStock, takeStock, type Line } from '../stock';
 import { likePattern } from './materials';
 
@@ -30,7 +30,7 @@ const linesBody = {
   type: 'array',
   minItems: 1,
   maxItems: 200,
-  items: obj({ materialId: int, quantity: { type: 'number', exclusiveMinimum: 0, maximum: 1e9 } }),
+  items: obj({ materialId: idIn, quantity: { type: 'number', exclusiveMinimum: 0, maximum: 1e9 } }),
 };
 
 interface ListQuery {
@@ -257,7 +257,7 @@ export default async function deliveryRoutes(app: FastifyInstance) {
   app.get<{ Params: { id: number } }>(
     '/deliveries/:id',
     {
-      schema: { tags: ['deliveries'], summary: 'One delivery', params: obj({ id: int }), response: { 200: delivery, 404: errorBody } },
+      schema: { tags: ['deliveries'], summary: 'One delivery', params: obj({ id: idIn }), response: { 200: delivery, 404: errorBody } },
     },
     async (req) => {
       await visibleDelivery(req.user, req.params.id);
@@ -281,7 +281,7 @@ export default async function deliveryRoutes(app: FastifyInstance) {
           description:
             'The receiver of a to_project delivery is the project (any member); of a to_company delivery, the company store. ' +
             'The sender is the other side. 409 when the delivery is no longer in transit.',
-          params: obj({ id: int }),
+          params: obj({ id: idIn }),
           response: { 200: delivery, 403: errorBody, 404: errorBody, 409: errorBody },
         },
       },
