@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { pagedRows, pool, tx } from '../db';
-import { canUseCompanyStore, projectAccess, requireCompanyStore } from '../access';
+import { canUseCompanyStore, lockProject, projectAccess, requireCompanyStore } from '../access';
 import type { AuthUser } from '../auth';
 import { badRequest, conflict, forbidden, notFound } from '../errors';
 import { parseProjectId, projectCode, searchNumber } from '../ids';
@@ -196,6 +196,8 @@ export default async function deliveryRoutes(app: FastifyInstance) {
       if (projectId === null) throw notFound('Project not found');
       const lines = checkLines(req.body.lines);
       const id = await tx(async (c) => {
+        // the project lock keeps a removal of this project from cascading the delivery away mid-send
+        await lockProject(c, projectId);
         const { rows } = await c.query(
           `INSERT INTO deliveries (project_id, direction, sent_by, note) SELECT id, 'to_project', $2, $3 FROM projects WHERE id = $1 RETURNING id`,
           [projectId, req.user.id, req.body.note ?? null],

@@ -147,7 +147,7 @@ They must end on or after they start, but they may fall outside the project's pl
 
 ### Removing things
 
-A project removal is refused while its store holds stock or a delivery is in transit, so material can't vanish. Removing a task drops its dependency links.
+A project removal is refused while its store holds stock or a delivery is in transit, so material can't vanish. A delivery to a project takes the project lock too, so it can't slip into a project that is being removed. Removing a task drops its dependency links.
 
 ### Notifications
 
