@@ -30,7 +30,7 @@ const linesBody = {
   type: 'array',
   minItems: 1,
   maxItems: 200,
-  items: obj({ materialId: idIn, quantity: { type: 'number', exclusiveMinimum: 0, maximum: 1e9 } }),
+  items: obj({ materialId: idIn, quantity: { type: 'number', exclusiveMinimum: 0, maximum: 1e9, multipleOf: 0.001 } }),
 };
 
 interface ListQuery {

@@ -22,7 +22,8 @@ declare module 'fastify' {
 export async function buildApp() {
   const app = Fastify({
     logger: { level: process.env.LOG_LEVEL ?? 'info' },
-    ajv: { customOptions: { keywords: ['example'] } },
+    // stock is stored to 3 decimals, so multipleOf: 0.001 must still pass 1.001, which divides to 1000.9999999999999
+    ajv: { customOptions: { keywords: ['example'], multipleOfPrecision: 3 } },
   });
 
   await app.register(swagger, {

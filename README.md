@@ -131,7 +131,7 @@ It loads the project's whole edge list (at most a few thousand rows) and does a 
 
 ### Stock never goes negative
 
-Every send locks the sender's stock rows with `SELECT ... FOR UPDATE`, in material order, then checks each quantity and subtracts. Locking in a fixed order means two deliveries with overlapping materials queue up instead of deadlocking. A `CHECK (quantity >= 0)` on both stock tables is the last line of defence. Adding stock, initiating, recording, rejecting and cancelling each run in one transaction. Record, reject and cancel lock the delivery row and refuse anything that is no longer In transit, so two people answering at once can't both move stock.
+Every send locks the sender's stock rows with `SELECT ... FOR UPDATE`, in material order, then checks each quantity and subtracts. Locking in a fixed order means two deliveries with overlapping materials queue up instead of deadlocking. A `CHECK (quantity >= 0)` on both stock tables is the last line of defence. Adding stock, initiating, recording, rejecting and cancelling each run in one transaction. Record, reject and cancel lock the delivery row and refuse anything that is no longer In transit, so two people answering at once can't both move stock. Quantities can have at most three decimal places, the same as the stock columns, so rounding can never make or lose stock.
 
 ### Who does what with a delivery
 
