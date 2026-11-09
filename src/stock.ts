@@ -39,12 +39,14 @@ export async function takeStock(c: PoolClient, store: Store, lines: Line[]) {
 export async function addStock(c: PoolClient, store: Store, lines: Line[]) {
   const ids = lines.map((l) => l.materialId);
   const qty = lines.map((l) => l.quantity);
-  if (store === null)
+  if (store === null) {
+    // same material order as takeStock, so two returns can't lock each other's rows in reverse
+    await c.query('SELECT 1 FROM company_stock WHERE material_id = ANY($1) ORDER BY material_id FOR UPDATE', [ids]);
     await c.query(
       `UPDATE company_stock s SET quantity = s.quantity + l.qty FROM unnest($1::int[], $2::numeric[]) AS l(id, qty) WHERE s.material_id = l.id`,
       [ids, qty],
     );
-  else
+  } else
     await c.query(
       `INSERT INTO project_stock (project_id, material_id, quantity, last_delivery_at)
        SELECT $3, id, qty, now() FROM unnest($1::int[], $2::numeric[]) AS l(id, qty) ORDER BY id
