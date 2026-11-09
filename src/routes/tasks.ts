@@ -6,6 +6,7 @@ import { badRequest, conflict, notFound } from '../errors';
 import { parseTaskNumber, searchNumber, taskCode } from '../ids';
 import { arr, bool, date, errorBody, int, obj, ok, pageOf, pageQuery, paged, str, strEnum, text } from '../schemas';
 import { LATE_SQL, notDoneUpstreamSql, startedDownstreamSql, waitingCte, wouldCycleSql } from '../taskSql';
+import { likePattern } from './materials';
 
 const STATUSES = ['not_started', 'in_progress', 'done'];
 const ACTIONS = ['start', 'done', 'reopen'];
@@ -179,7 +180,7 @@ export default async function taskRoutes(app: FastifyInstance) {
       };
       if (q?.trim()) {
         const n = searchNumber(q, new RegExp(`PRJ-0*${projectId}-T-|T-`));
-        params.push(`%${q.trim().replace(/[\\%_]/g, '\\$&')}%`, n);
+        params.push(likePattern(q), n);
         where.push(`(name ILIKE $${params.length - 1} OR number = $${params.length})`);
       }
       if (status) add((p) => `status = ${p}::task_status`, status);

@@ -5,6 +5,7 @@ import { badRequest, conflict } from '../errors';
 import { projectCode, searchNumber } from '../ids';
 import { bool, date, errorBody, int, num, obj, ok, pageOf, pageQuery, paged, projectIdParam, str, strEnum, text } from '../schemas';
 import { blockedCountsSql, LATE_SQL } from '../taskSql';
+import { likePattern } from './materials';
 
 const projectSummary = obj({
   id: str,
@@ -72,7 +73,7 @@ export default async function projectRoutes(app: FastifyInstance) {
       const params: unknown[] = [req.user.id];
       const where: string[] = [];
       if (q?.trim()) {
-        params.push(`%${q.trim().replace(/[\\%_]/g, '\\$&')}%`);
+        params.push(likePattern(q));
         const n = searchNumber(q, /PRJ-/);
         params.push(n);
         where.push(`(p.name ILIKE $${params.length - 1} OR p.id = $${params.length})`);
