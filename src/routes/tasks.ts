@@ -1,7 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import type { PoolClient } from 'pg';
 import { pagedRows, pool, tx, type Db } from '../db';
-import { lockProject, projectAccess } from '../access';
+import { projectAccess } from '../access';
+import type { AuthUser } from '../auth';
 import { badRequest, conflict, notFound } from '../errors';
 import { parseTaskNumber, searchNumber, taskCode } from '../ids';
 import { arr, bool, date, errorBody, int, obj, ok, pageOf, pageQuery, paged, str, strEnum, text } from '../schemas';
@@ -242,17 +243,16 @@ export default async function taskRoutes(app: FastifyInstance) {
       },
     },
     async (req, reply) => {
-      const { projectId } = await projectAccess(pool, req.user, req.params.projectId);
       const { name, plannedStart, plannedEnd } = req.body;
       checkDates(plannedStart, plannedEnd);
-      const number = await tx(async (c) => {
-        // the counter row lock makes concurrent creates in one project queue up, so numbers never collide
+      const { projectId, number } = await tx(async (c) => {
+        const { projectId } = await projectAccess(c, req.user, req.params.projectId, true);
         const { rows } = await c.query('UPDATE projects SET task_counter = task_counter + 1, task_total = task_total + 1 WHERE id = $1 RETURNING task_counter', [projectId]);
         await c.query(
           'INSERT INTO tasks (project_id, number, name, planned_start, planned_end) VALUES ($1, $2, $3, $4, $5)',
           [projectId, rows[0].task_counter, name.trim(), plannedStart, plannedEnd],
         );
-        return rows[0].task_counter as number;
+        return { projectId, number: rows[0].task_counter as number };
       });
       const task = await findTask(pool, projectId, String(number));
       return reply.status(201).send(await loadTaskDetail(projectId, task));
@@ -287,17 +287,17 @@ export default async function taskRoutes(app: FastifyInstance) {
       },
     },
     async (req) => {
-      const { projectId } = await projectAccess(pool, req.user, req.params.projectId);
-      const task = await findTask(pool, projectId, req.params.taskId);
-      const { name, plannedStart, plannedEnd } = req.body;
-      checkDates(plannedStart ?? task.planned_start, plannedEnd ?? task.planned_end);
-      await pool.query(
-        `UPDATE tasks SET name = coalesce($2, name), planned_start = coalesce($3, planned_start), planned_end = coalesce($4, planned_end)
-         WHERE id = $1`,
-        [task.id, name?.trim() ?? null, plannedStart ?? null, plannedEnd ?? null],
-      ).catch((e) => {
-        if (e.code === '23514') throw badRequest('plannedEnd must be on or after plannedStart');
-        throw e;
+      const projectId = await tx(async (c) => {
+        const { projectId } = await projectAccess(c, req.user, req.params.projectId, true);
+        const task = await findTask(c, projectId, req.params.taskId);
+        const { name, plannedStart, plannedEnd } = req.body;
+        checkDates(plannedStart ?? task.planned_start, plannedEnd ?? task.planned_end);
+        await c.query(
+          `UPDATE tasks SET name = coalesce($2, name), planned_start = coalesce($3, planned_start), planned_end = coalesce($4, planned_end)
+           WHERE id = $1`,
+          [task.id, name?.trim() ?? null, plannedStart ?? null, plannedEnd ?? null],
+        );
+        return projectId;
       });
       return loadTaskDetail(projectId, await findTask(pool, projectId, req.params.taskId));
     },
@@ -314,9 +314,8 @@ export default async function taskRoutes(app: FastifyInstance) {
       },
     },
     async (req) => {
-      const { projectId } = await projectAccess(pool, req.user, req.params.projectId);
       await tx(async (c) => {
-        await lockProject(c, projectId);
+        const { projectId } = await projectAccess(c, req.user, req.params.projectId, true);
         const task = await findTask(c, projectId, req.params.taskId);
         await c.query('DELETE FROM tasks WHERE id = $1', [task.id]);
         await c.query('UPDATE projects SET task_total = task_total - 1, task_done = task_done - $2 WHERE id = $1', [
@@ -329,9 +328,9 @@ export default async function taskRoutes(app: FastifyInstance) {
   );
 
   // status actions; all of them hold the project lock so a start and a reopen next door can't both pass their checks
-  const transition = async (c: PoolClient, projectId: number, taskParam: string, action: string) => {
-    await lockProject(c, projectId);
-    const task = await findTask(c, projectId, taskParam);
+  const transition = async (c: PoolClient, user: AuthUser, params: TaskParams, action: string) => {
+    const { projectId } = await projectAccess(c, user, params.projectId, true);
+    const task = await findTask(c, projectId, params.taskId);
     const from = { start: 'not_started', done: 'in_progress', reopen: 'done' }[action]!;
     const to = { start: 'in_progress', done: 'done', reopen: 'in_progress' }[action]!;
     if (task.status !== from) throw conflict('invalid_transition', `Cannot ${action} a task that is ${task.status}`);
@@ -341,6 +340,7 @@ export default async function taskRoutes(app: FastifyInstance) {
       throw conflict('dependents_started', 'A task that waits on this one has already started');
     await c.query('UPDATE tasks SET status = $2 WHERE id = $1', [task.id, to]);
     if (action !== 'start') await c.query('UPDATE projects SET task_done = task_done + $2 WHERE id = $1', [projectId, action === 'done' ? 1 : -1]);
+    return projectId;
   };
 
   for (const action of ACTIONS) {
@@ -359,8 +359,7 @@ export default async function taskRoutes(app: FastifyInstance) {
         },
       },
       async (req) => {
-        const { projectId } = await projectAccess(pool, req.user, req.params.projectId);
-        await tx((c) => transition(c, projectId, req.params.taskId, action));
+        const projectId = await tx((c) => transition(c, req.user, req.params, action));
         return loadTaskDetail(projectId, await findTask(pool, projectId, req.params.taskId));
       },
     );
@@ -379,10 +378,9 @@ export default async function taskRoutes(app: FastifyInstance) {
       },
     },
     async (req) => {
-      const { projectId } = await projectAccess(pool, req.user, req.params.projectId);
-      await tx(async (c) => {
+      const projectId = await tx(async (c) => {
         // one lock per project so two inserts that each look safe can't together make a loop
-        await lockProject(c, projectId);
+        const { projectId } = await projectAccess(c, req.user, req.params.projectId, true);
         const task = await findTask(c, projectId, req.params.taskId);
         const upstream = await findTask(c, projectId, req.body.dependsOn);
         if (task.id === upstream.id) throw conflict('cycle', 'A task cannot wait on itself');
@@ -392,6 +390,7 @@ export default async function taskRoutes(app: FastifyInstance) {
           'INSERT INTO task_dependencies (project_id, task_id, depends_on_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING',
           [projectId, task.id, upstream.id],
         );
+        return projectId;
       });
       return loadTaskDetail(projectId, await findTask(pool, projectId, req.params.taskId));
     },
@@ -408,13 +407,13 @@ export default async function taskRoutes(app: FastifyInstance) {
       },
     },
     async (req) => {
-      const { projectId } = await projectAccess(pool, req.user, req.params.projectId);
-      await tx(async (c) => {
-        await lockProject(c, projectId);
+      const projectId = await tx(async (c) => {
+        const { projectId } = await projectAccess(c, req.user, req.params.projectId, true);
         const task = await findTask(c, projectId, req.params.taskId);
         const upstream = await findTask(c, projectId, req.params.dependsOnId);
         const { rowCount } = await c.query('DELETE FROM task_dependencies WHERE task_id = $1 AND depends_on_id = $2', [task.id, upstream.id]);
         if (!rowCount) throw notFound('Dependency not found');
+        return projectId;
       });
       return loadTaskDetail(projectId, await findTask(pool, projectId, req.params.taskId));
     },

@@ -125,7 +125,7 @@ async function visibleDelivery(user: AuthUser, id: number) {
     member = true;
   } catch {}
   if (!member && !canUseCompanyStore(user)) throw notFound('Delivery not found');
-  return { ...d, member };
+  return d;
 }
 
 export default async function deliveryRoutes(app: FastifyInstance) {
@@ -241,9 +241,9 @@ export default async function deliveryRoutes(app: FastifyInstance) {
       },
     },
     async (req, reply) => {
-      const { projectId } = await projectAccess(pool, req.user, req.params.projectId);
       const lines = checkLines(req.body.lines);
       const id = await tx(async (c) => {
+        const { projectId } = await projectAccess(c, req.user, req.params.projectId, true);
         await takeStock(c, projectId, lines);
         const { rows } = await c.query(
           `INSERT INTO deliveries (project_id, direction, sent_by, note) VALUES ($1, 'to_company', $2, $3) RETURNING id`,
@@ -290,9 +290,13 @@ export default async function deliveryRoutes(app: FastifyInstance) {
       async (req) => {
         const d = await visibleDelivery(req.user, req.params.id);
         const projectSide = (d.direction === 'to_project') === (a.who === 'receiver');
-        if (projectSide && !d.member) throw forbidden('Only members of this project can do this');
         if (!projectSide) requireCompanyStore(req.user);
         await tx(async (c) => {
+          // membership is read under the project lock, so someone removed a moment ago can't answer
+          if (projectSide)
+            await projectAccess(c, req.user, projectCode(d.project_id), true).catch(() => {
+              throw forbidden('Only members of this project can do this');
+            });
           // the row lock plus the status check means two people answering at once can't both move stock
           const { rows } = await c.query('SELECT status FROM deliveries WHERE id = $1 FOR UPDATE', [d.id]);
           if (rows[0].status !== 'in_transit') throw conflict('not_in_transit', `This delivery is already ${rows[0].status}`);

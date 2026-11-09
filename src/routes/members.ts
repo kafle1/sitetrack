@@ -77,17 +77,19 @@ export default async function memberRoutes(app: FastifyInstance) {
       },
     },
     async (req, reply) => {
-      const { projectId } = await projectAdmin(pool, req.user, req.params.projectId);
-      const { rows } = await pool.query('SELECT id FROM users WHERE lower(email) = lower($1)', [req.body.email.trim()]);
-      if (!rows[0]) throw notFound('No registered user has that email');
-      const userId = rows[0].id;
-      const { rows: inserted } = await pool.query(
-        `INSERT INTO invitations (project_id, user_id, invited_by)
-         SELECT $1, $2, $3 WHERE NOT EXISTS (SELECT 1 FROM project_members WHERE project_id = $1 AND user_id = $2)
-         ON CONFLICT DO NOTHING RETURNING id`,
-        [projectId, userId, req.user.id],
-      );
-      if (!inserted[0]) throw conflict('already_member_or_invited', 'That person is already a member or already has an open invitation');
+      const projectId = await tx(async (c) => {
+        const { projectId } = await projectAdmin(c, req.user, req.params.projectId, true);
+        const { rows } = await c.query('SELECT id FROM users WHERE lower(email) = lower($1)', [req.body.email.trim()]);
+        if (!rows[0]) throw notFound('No registered user has that email');
+        const { rows: inserted } = await c.query(
+          `INSERT INTO invitations (project_id, user_id, invited_by)
+           SELECT $1, $2, $3 WHERE NOT EXISTS (SELECT 1 FROM project_members WHERE project_id = $1 AND user_id = $2)
+           ON CONFLICT DO NOTHING RETURNING id`,
+          [projectId, rows[0].id, req.user.id],
+        );
+        if (!inserted[0]) throw conflict('already_member_or_invited', 'That person is already a member or already has an open invitation');
+        return projectId;
+      });
       return reply.status(201).send(await membersOf(projectId));
     },
   );
@@ -103,12 +105,15 @@ export default async function memberRoutes(app: FastifyInstance) {
       },
     },
     async (req) => {
-      const { projectId } = await projectAdmin(pool, req.user, req.params.projectId);
-      const { rowCount } = await pool.query(
-        `UPDATE invitations SET status = 'withdrawn', answered_at = now() WHERE id = $1 AND project_id = $2 AND status = 'pending'`,
-        [req.params.invitationId, projectId],
-      );
-      if (!rowCount) throw notFound('No open invitation with that ID');
+      const projectId = await tx(async (c) => {
+        const { projectId } = await projectAdmin(c, req.user, req.params.projectId, true);
+        const { rowCount } = await c.query(
+          `UPDATE invitations SET status = 'withdrawn', answered_at = now() WHERE id = $1 AND project_id = $2 AND status = 'pending'`,
+          [req.params.invitationId, projectId],
+        );
+        if (!rowCount) throw notFound('No open invitation with that ID');
+        return projectId;
+      });
       return membersOf(projectId);
     },
   );

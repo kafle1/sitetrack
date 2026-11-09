@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { pagedRows, pool, tx } from '../db';
-import { lockProject, projectAccess, projectAdmin } from '../access';
+import { projectAccess, projectAdmin } from '../access';
 import { badRequest, conflict } from '../errors';
 import { projectCode, searchNumber } from '../ids';
 import { bool, date, errorBody, int, num, obj, ok, pageOf, pageQuery, paged, projectIdParam, str, strEnum, text } from '../schemas';
@@ -175,16 +175,19 @@ export default async function projectRoutes(app: FastifyInstance) {
       },
     },
     async (req) => {
-      const { projectId } = await projectAdmin(pool, req.user, req.params.projectId);
       const { name, plannedStart, plannedEnd } = req.body;
       checkDates(plannedStart, plannedEnd);
-      await pool.query(
-        `UPDATE projects SET name = coalesce($2, name), planned_start = coalesce($3, planned_start), planned_end = coalesce($4, planned_end)
-         WHERE id = $1`,
-        [projectId, name?.trim() ?? null, plannedStart ?? null, plannedEnd ?? null],
-      ).catch((e) => {
-        if (e.code === '23514') throw badRequest('plannedEnd must be on or after plannedStart');
-        throw e;
+      const projectId = await tx(async (c) => {
+        const { projectId } = await projectAdmin(c, req.user, req.params.projectId, true);
+        await c.query(
+          `UPDATE projects SET name = coalesce($2, name), planned_start = coalesce($3, planned_start), planned_end = coalesce($4, planned_end)
+           WHERE id = $1`,
+          [projectId, name?.trim() ?? null, plannedStart ?? null, plannedEnd ?? null],
+        ).catch((e) => {
+          if (e.code === '23514') throw badRequest('plannedEnd must be on or after plannedStart');
+          throw e;
+        });
+        return projectId;
       });
       return projectDetail(projectId, req.user.id);
     },
@@ -202,9 +205,8 @@ export default async function projectRoutes(app: FastifyInstance) {
       },
     },
     async (req) => {
-      const { projectId } = await projectAdmin(pool, req.user, req.params.projectId);
       await tx(async (c) => {
-        await lockProject(c, projectId);
+        const { projectId } = await projectAdmin(c, req.user, req.params.projectId, true);
         const { rows } = await c.query(
           `SELECT EXISTS (SELECT 1 FROM project_stock WHERE project_id = $1 AND quantity > 0) AS stock,
                   EXISTS (SELECT 1 FROM deliveries WHERE project_id = $1 AND status = 'in_transit') AS transit`,
