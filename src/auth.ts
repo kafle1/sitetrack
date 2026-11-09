@@ -73,7 +73,7 @@ const unauthorized = () => new HttpError(401, 'unauthorized', 'Log in again');
 // rotates the refresh token and slides the session expiry forward
 export async function refreshSession(refreshToken: string) {
   const [sessionId, secret] = refreshToken.split('.');
-  if (!sessionId || !secret || !/^[0-9a-f-]{36}$/.test(sessionId)) throw unauthorized();
+  if (!sessionId || !secret || !/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(sessionId)) throw unauthorized();
   const next = crypto.randomBytes(32).toString('base64url');
   const { rows } = await pool.query(
     `UPDATE sessions SET refresh_hash = $3, expires_at = now() + make_interval(days => $4)
