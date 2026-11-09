@@ -1507,7 +1507,8 @@
                 "parameters": [
                     {
                         "schema": {
-                            "type": "string"
+                            "type": "string",
+                            "example": "PRJ-0042"
                         },
                         "in": "path",
                         "name": "projectId",
@@ -1710,7 +1711,8 @@
                 "parameters": [
                     {
                         "schema": {
-                            "type": "string"
+                            "type": "string",
+                            "example": "PRJ-0042"
                         },
                         "in": "path",
                         "name": "projectId",
@@ -1915,7 +1917,8 @@
                 "parameters": [
                     {
                         "schema": {
-                            "type": "string"
+                            "type": "string",
+                            "example": "PRJ-0042"
                         },
                         "in": "path",
                         "name": "projectId",
@@ -4314,7 +4317,8 @@
                 "parameters": [
                     {
                         "schema": {
-                            "type": "string"
+                            "type": "string",
+                            "example": "PRJ-0042"
                         },
                         "in": "path",
                         "name": "projectId",
@@ -5250,7 +5254,7 @@
                                 "properties": {
                                     "quantity": {
                                         "type": "number",
-                                        "exclusiveMinimum": 0,
+                                        "minimum": 0.001,
                                         "maximum": 1000000000,
                                         "multipleOf": 0.001
                                     }
@@ -5984,7 +5988,7 @@
                                                 },
                                                 "quantity": {
                                                     "type": "number",
-                                                    "exclusiveMinimum": 0,
+                                                    "minimum": 0.001,
                                                     "maximum": 1000000000,
                                                     "multipleOf": 0.001
                                                 }
@@ -6698,7 +6702,7 @@
                                                 },
                                                 "quantity": {
                                                     "type": "number",
-                                                    "exclusiveMinimum": 0,
+                                                    "minimum": 0.001,
                                                     "maximum": 1000000000,
                                                     "multipleOf": 0.001
                                                 }
