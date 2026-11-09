@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { pool } from '../db';
 import { createSession, hashPassword, refreshSession, revokeSession, verifyLogin } from '../auth';
 import { HttpError, conflict } from '../errors';
-import { errorBody, int, obj, ok, str, strEnum } from '../schemas';
+import { errorBody, int, obj, ok, str, strEnum, text } from '../schemas';
 
 const tokens = obj({ accessToken: str, refreshToken: str, expiresIn: int });
 const me = obj({ id: int, name: str, email: str, role: strEnum(['user', 'store_manager', 'superadmin']), unreadNotifications: int });
@@ -17,7 +17,7 @@ export default async function authRoutes(app: FastifyInstance) {
         summary: 'Register a new account and log in',
         security: [],
         body: obj({
-          name: { type: 'string', minLength: 1, maxLength: 200 },
+          name: text(200),
           email: { type: 'string', format: 'email', maxLength: 320 },
           password: { type: 'string', minLength: 8, maxLength: 200 },
           role: strEnum(['user', 'store_manager', 'superadmin']),

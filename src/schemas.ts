@@ -4,6 +4,8 @@ export const str = { type: 'string' } as const;
 export const int = { type: 'integer' } as const;
 // ids in paths and bodies; a number past Postgres integer range is a bad request, not a database error
 export const idIn = { type: 'integer', maximum: 2147483647 } as const;
+// \S so a name of only spaces doesn't trim down to an empty one
+export const text = (maxLength: number) => ({ type: 'string', minLength: 1, maxLength, pattern: '\\S' }) as const;
 export const num = { type: 'number' } as const;
 export const bool = { type: 'boolean' } as const;
 export const date = { type: 'string', format: 'date', example: '2026-11-09' } as const;

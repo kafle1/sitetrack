@@ -4,7 +4,7 @@ import { pagedRows, pool, tx, type Db } from '../db';
 import { lockProject, projectAccess } from '../access';
 import { badRequest, conflict, notFound } from '../errors';
 import { parseTaskNumber, searchNumber, taskCode } from '../ids';
-import { arr, bool, date, errorBody, int, obj, ok, pageOf, pageQuery, paged, str, strEnum } from '../schemas';
+import { arr, bool, date, errorBody, int, obj, ok, pageOf, pageQuery, paged, str, strEnum, text } from '../schemas';
 import { LATE_SQL, notDoneUpstreamSql, startedDownstreamSql, waitingCte, wouldCycleSql } from '../taskSql';
 
 const STATUSES = ['not_started', 'in_progress', 'done'];
@@ -236,7 +236,7 @@ export default async function taskRoutes(app: FastifyInstance) {
         tags: ['tasks'],
         summary: 'Create a task; it starts as not_started',
         params: projectParams,
-        body: obj({ name: { type: 'string', minLength: 1, maxLength: 300 }, plannedStart: date, plannedEnd: date }),
+        body: obj({ name: text(300), plannedStart: date, plannedEnd: date }),
         response: { 201: taskDetail, 400: errorBody, 404: errorBody },
       },
     },
@@ -281,7 +281,7 @@ export default async function taskRoutes(app: FastifyInstance) {
         tags: ['tasks'],
         summary: 'Edit a task name or dates (status changes go through the action routes)',
         params: taskParams,
-        body: { ...obj({ name: { type: 'string', minLength: 1, maxLength: 300 }, plannedStart: date, plannedEnd: date }, []), minProperties: 1 },
+        body: { ...obj({ name: text(300), plannedStart: date, plannedEnd: date }, []), minProperties: 1 },
         response: { 200: taskDetail, 400: errorBody, 404: errorBody },
       },
     },

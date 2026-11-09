@@ -2,13 +2,13 @@ import type { FastifyInstance } from 'fastify';
 import { pool, tx } from '../db';
 import { requireCompanyStore } from '../access';
 import { conflict, notFound } from '../errors';
-import { arr, errorBody, idIn, int, obj, ok, pageOf, pageQuery, paged, str } from '../schemas';
+import { arr, errorBody, idIn, int, obj, ok, pageOf, pageQuery, paged, str, text } from '../schemas';
 
 const material = obj({ id: int, name: str, category: str, unit: str });
 const body = {
-  name: { type: 'string', minLength: 1, maxLength: 200 },
-  category: { type: 'string', minLength: 1, maxLength: 100 },
-  unit: { type: 'string', minLength: 1, maxLength: 30 },
+  name: text(200),
+  category: text(100),
+  unit: text(30),
 };
 
 export const likePattern = (q: string) => `%${q.trim().replace(/[\\%_]/g, '\\$&')}%`;

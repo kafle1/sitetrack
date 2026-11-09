@@ -3,7 +3,7 @@ import { pagedRows, pool, tx } from '../db';
 import { lockProject, projectAccess, projectAdmin } from '../access';
 import { badRequest, conflict } from '../errors';
 import { projectCode, searchNumber } from '../ids';
-import { bool, date, errorBody, int, num, obj, ok, pageOf, pageQuery, paged, projectIdParam, str, strEnum } from '../schemas';
+import { bool, date, errorBody, int, num, obj, ok, pageOf, pageQuery, paged, projectIdParam, str, strEnum, text } from '../schemas';
 import { blockedCountsSql, LATE_SQL } from '../taskSql';
 
 const projectSummary = obj({
@@ -20,7 +20,7 @@ const projectSummary = obj({
 });
 
 const projectBody = {
-  name: { type: 'string', minLength: 1, maxLength: 200 },
+  name: text(200),
   plannedStart: date,
   plannedEnd: date,
 };
