@@ -52,8 +52,8 @@ export async function buildApp() {
   app.setErrorHandler((err: any, req, reply) => {
     if (err instanceof HttpError) return reply.status(err.status).send({ error: err.code, message: err.message });
     if (err.validation) return reply.status(400).send({ error: 'bad_request', message: err.message });
-    // a CHECK constraint is the last line of defence for stock
-    if (err.code === '23514') return reply.status(409).send({ error: 'constraint', message: 'That change would break a data rule' });
+    // a CHECK constraint is the last line of defence for stock, and 22003 is a stock total too big for its column
+    if (err.code === '23514' || err.code === '22003') return reply.status(409).send({ error: 'constraint', message: 'That change would break a data rule' });
     if (err.statusCode && err.statusCode < 500) return reply.status(err.statusCode).send({ error: 'bad_request', message: err.message });
     req.log.error(err);
     return reply.status(500).send({ error: 'internal', message: 'Something went wrong' });
