@@ -2194,7 +2194,7 @@
         },
         "/notifications/read": {
             "post": {
-                "summary": "Mark notifications as read: the listed ids, or all of them when ids is left out",
+                "summary": "Mark notifications as read: send { \"ids\": [...] } for some, or {} for all of them",
                 "tags": [
                     "notifications"
                 ],
