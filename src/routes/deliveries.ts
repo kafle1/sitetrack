@@ -97,9 +97,13 @@ async function list(q: ListQuery, projectId: number | null) {
   if (q.from) where.push(`d.sent_at >= $${params.push(q.from)}::date`);
   if (q.to) where.push(`d.sent_at < $${params.push(q.to)}::date + 1`);
   const w = where.length ? 'WHERE ' + where.join(' AND ') : '';
-  // count and page run separately so the page can stop early on the sent_at index
+  // pick the page's ids on the index first, so deep pages skip rows without joining names onto them
   const [page, count] = await Promise.all([
-    pool.query(`${SELECT} ${w} ORDER BY d.sent_at DESC, d.id DESC LIMIT ${limit} OFFSET ${offset}`, params),
+    pool.query(
+      `${SELECT} WHERE d.id IN (SELECT d.id FROM deliveries d ${w} ORDER BY d.sent_at DESC, d.id DESC LIMIT ${limit} OFFSET ${offset})
+       ORDER BY d.sent_at DESC, d.id DESC`,
+      params,
+    ),
     pool.query(`SELECT count(*)::int AS n FROM deliveries d ${w}`, params),
   ]);
   return { items: await shape(page.rows), page: q.page, pageSize: q.pageSize, total: count.rows[0].n };
