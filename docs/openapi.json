@@ -32,7 +32,8 @@
                                     "name": {
                                         "type": "string",
                                         "minLength": 1,
-                                        "maxLength": 200
+                                        "maxLength": 200,
+                                        "pattern": "\\S"
                                     },
                                     "email": {
                                         "type": "string",
@@ -379,6 +380,7 @@
                         "schema": {
                             "type": "integer",
                             "minimum": 1,
+                            "maximum": 1000000,
                             "default": 1
                         },
                         "in": "query",
@@ -564,7 +566,8 @@
                                     "name": {
                                         "type": "string",
                                         "minLength": 1,
-                                        "maxLength": 200
+                                        "maxLength": 200,
+                                        "pattern": "\\S"
                                     },
                                     "plannedStart": {
                                         "type": "string",
@@ -832,7 +835,8 @@
                                     "name": {
                                         "type": "string",
                                         "minLength": 1,
-                                        "maxLength": 200
+                                        "maxLength": 200,
+                                        "pattern": "\\S"
                                     },
                                     "plannedStart": {
                                         "type": "string",
@@ -1511,7 +1515,8 @@
                     },
                     {
                         "schema": {
-                            "type": "integer"
+                            "type": "integer",
+                            "maximum": 2147483647
                         },
                         "in": "path",
                         "name": "invitationId",
@@ -1713,7 +1718,8 @@
                     },
                     {
                         "schema": {
-                            "type": "integer"
+                            "type": "integer",
+                            "maximum": 2147483647
                         },
                         "in": "path",
                         "name": "userId",
@@ -1917,7 +1923,8 @@
                     },
                     {
                         "schema": {
-                            "type": "integer"
+                            "type": "integer",
+                            "maximum": 2147483647
                         },
                         "in": "path",
                         "name": "userId",
@@ -2027,6 +2034,7 @@
                         "schema": {
                             "type": "integer",
                             "minimum": 1,
+                            "maximum": 1000000,
                             "default": 1
                         },
                         "in": "query",
@@ -2208,7 +2216,8 @@
                                     "ids": {
                                         "type": "array",
                                         "items": {
-                                            "type": "integer"
+                                            "type": "integer",
+                                            "maximum": 2147483647
                                         },
                                         "maxItems": 500
                                     }
@@ -2250,7 +2259,8 @@
                 "parameters": [
                     {
                         "schema": {
-                            "type": "integer"
+                            "type": "integer",
+                            "maximum": 2147483647
                         },
                         "in": "path",
                         "name": "invitationId",
@@ -2336,7 +2346,8 @@
                 "parameters": [
                     {
                         "schema": {
-                            "type": "integer"
+                            "type": "integer",
+                            "maximum": 2147483647
                         },
                         "in": "path",
                         "name": "invitationId",
@@ -2424,6 +2435,7 @@
                         "schema": {
                             "type": "integer",
                             "minimum": 1,
+                            "maximum": 1000000,
                             "default": 1
                         },
                         "in": "query",
@@ -2666,7 +2678,8 @@
                                     "name": {
                                         "type": "string",
                                         "minLength": 1,
-                                        "maxLength": 300
+                                        "maxLength": 300,
+                                        "pattern": "\\S"
                                     },
                                     "plannedStart": {
                                         "type": "string",
@@ -3093,7 +3106,8 @@
                                     "name": {
                                         "type": "string",
                                         "minLength": 1,
-                                        "maxLength": 300
+                                        "maxLength": 300,
+                                        "pattern": "\\S"
                                     },
                                     "plannedStart": {
                                         "type": "string",
@@ -4500,6 +4514,7 @@
                         "schema": {
                             "type": "integer",
                             "minimum": 1,
+                            "maximum": 1000000,
                             "default": 1
                         },
                         "in": "query",
@@ -4609,17 +4624,20 @@
                                     "name": {
                                         "type": "string",
                                         "minLength": 1,
-                                        "maxLength": 200
+                                        "maxLength": 200,
+                                        "pattern": "\\S"
                                     },
                                     "category": {
                                         "type": "string",
                                         "minLength": 1,
-                                        "maxLength": 100
+                                        "maxLength": 100,
+                                        "pattern": "\\S"
                                     },
                                     "unit": {
                                         "type": "string",
                                         "minLength": 1,
-                                        "maxLength": 30
+                                        "maxLength": 30,
+                                        "pattern": "\\S"
                                     }
                                 },
                                 "required": [
@@ -4722,7 +4740,8 @@
                 "parameters": [
                     {
                         "schema": {
-                            "type": "integer"
+                            "type": "integer",
+                            "maximum": 2147483647
                         },
                         "in": "path",
                         "name": "id",
@@ -4801,17 +4820,20 @@
                                     "name": {
                                         "type": "string",
                                         "minLength": 1,
-                                        "maxLength": 200
+                                        "maxLength": 200,
+                                        "pattern": "\\S"
                                     },
                                     "category": {
                                         "type": "string",
                                         "minLength": 1,
-                                        "maxLength": 100
+                                        "maxLength": 100,
+                                        "pattern": "\\S"
                                     },
                                     "unit": {
                                         "type": "string",
                                         "minLength": 1,
-                                        "maxLength": 30
+                                        "maxLength": 30,
+                                        "pattern": "\\S"
                                     }
                                 },
                                 "required": [],
@@ -4824,7 +4846,8 @@
                 "parameters": [
                     {
                         "schema": {
-                            "type": "integer"
+                            "type": "integer",
+                            "maximum": 2147483647
                         },
                         "in": "path",
                         "name": "id",
@@ -4920,7 +4943,8 @@
                 "parameters": [
                     {
                         "schema": {
-                            "type": "integer"
+                            "type": "integer",
+                            "maximum": 2147483647
                         },
                         "in": "path",
                         "name": "id",
@@ -5031,6 +5055,7 @@
                         "schema": {
                             "type": "integer",
                             "minimum": 1,
+                            "maximum": 1000000,
                             "default": 1
                         },
                         "in": "query",
@@ -5226,7 +5251,8 @@
                                     "quantity": {
                                         "type": "number",
                                         "exclusiveMinimum": 0,
-                                        "maximum": 1000000000
+                                        "maximum": 1000000000,
+                                        "multipleOf": 0.001
                                     }
                                 },
                                 "required": [
@@ -5240,7 +5266,8 @@
                 "parameters": [
                     {
                         "schema": {
-                            "type": "integer"
+                            "type": "integer",
+                            "maximum": 2147483647
                         },
                         "in": "path",
                         "name": "materialId",
@@ -5348,7 +5375,8 @@
                                     "reorderPoint": {
                                         "type": "number",
                                         "minimum": 0,
-                                        "maximum": 1000000000
+                                        "maximum": 1000000000,
+                                        "multipleOf": 0.001
                                     }
                                 },
                                 "required": [
@@ -5362,7 +5390,8 @@
                 "parameters": [
                     {
                         "schema": {
-                            "type": "integer"
+                            "type": "integer",
+                            "maximum": 2147483647
                         },
                         "in": "path",
                         "name": "materialId",
@@ -5465,6 +5494,7 @@
                         "schema": {
                             "type": "integer",
                             "minimum": 1,
+                            "maximum": 1000000,
                             "default": 1
                         },
                         "in": "query",
@@ -5640,6 +5670,7 @@
                         "schema": {
                             "type": "integer",
                             "minimum": 1,
+                            "maximum": 1000000,
                             "default": 1
                         },
                         "in": "query",
@@ -5948,12 +5979,14 @@
                                             "type": "object",
                                             "properties": {
                                                 "materialId": {
-                                                    "type": "integer"
+                                                    "type": "integer",
+                                                    "maximum": 2147483647
                                                 },
                                                 "quantity": {
                                                     "type": "number",
                                                     "exclusiveMinimum": 0,
-                                                    "maximum": 1000000000
+                                                    "maximum": 1000000000,
+                                                    "multipleOf": 0.001
                                                 }
                                             },
                                             "required": [
@@ -6242,6 +6275,7 @@
                         "schema": {
                             "type": "integer",
                             "minimum": 1,
+                            "maximum": 1000000,
                             "default": 1
                         },
                         "in": "query",
@@ -6354,6 +6388,7 @@
                         "schema": {
                             "type": "integer",
                             "minimum": 1,
+                            "maximum": 1000000,
                             "default": 1
                         },
                         "in": "query",
@@ -6658,12 +6693,14 @@
                                             "type": "object",
                                             "properties": {
                                                 "materialId": {
-                                                    "type": "integer"
+                                                    "type": "integer",
+                                                    "maximum": 2147483647
                                                 },
                                                 "quantity": {
                                                     "type": "number",
                                                     "exclusiveMinimum": 0,
-                                                    "maximum": 1000000000
+                                                    "maximum": 1000000000,
+                                                    "multipleOf": 0.001
                                                 }
                                             },
                                             "required": [
@@ -6937,7 +6974,8 @@
                 "parameters": [
                     {
                         "schema": {
-                            "type": "integer"
+                            "type": "integer",
+                            "maximum": 2147483647
                         },
                         "in": "path",
                         "name": "id",
@@ -7139,7 +7177,8 @@
                 "parameters": [
                     {
                         "schema": {
-                            "type": "integer"
+                            "type": "integer",
+                            "maximum": 2147483647
                         },
                         "in": "path",
                         "name": "id",
@@ -7387,7 +7426,8 @@
                 "parameters": [
                     {
                         "schema": {
-                            "type": "integer"
+                            "type": "integer",
+                            "maximum": 2147483647
                         },
                         "in": "path",
                         "name": "id",
@@ -7635,7 +7675,8 @@
                 "parameters": [
                     {
                         "schema": {
-                            "type": "integer"
+                            "type": "integer",
+                            "maximum": 2147483647
                         },
                         "in": "path",
                         "name": "id",
