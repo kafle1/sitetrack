@@ -4,7 +4,7 @@ import swaggerUi from '@fastify/swagger-ui';
 import { pool } from './db';
 import { migrate } from './migrate';
 import { authenticate } from './auth';
-import { HttpError } from './errors';
+import { HttpError, notFound } from './errors';
 import authRoutes from './routes/auth';
 import projectRoutes from './routes/projects';
 import memberRoutes from './routes/members';
@@ -57,6 +57,10 @@ export async function buildApp() {
     if (err.statusCode && err.statusCode < 500) return reply.status(err.statusCode).send({ error: 'bad_request', message: err.message });
     req.log.error(err);
     return reply.status(500).send({ error: 'internal', message: 'Something went wrong' });
+  });
+
+  app.setNotFoundHandler(async () => {
+    throw notFound();
   });
 
   app.get('/health', { config: { public: true }, schema: { hide: true } }, async () => {
