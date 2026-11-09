@@ -1,11 +1,11 @@
 import type { FastifyInstance } from 'fastify';
-import { pagedRows, pool, tx } from '../db';
+import type { AuthUser } from '../auth';
+import { likePattern, pagedRows, pool, tx } from '../db';
 import { projectAccess, projectAdmin } from '../access';
-import { badRequest, conflict } from '../errors';
+import { checkDates, conflict } from '../errors';
 import { projectCode, searchNumber } from '../ids';
-import { bool, date, errorBody, int, num, obj, ok, pageOf, pageQuery, paged, projectIdParam, str, strEnum, text } from '../schemas';
-import { blockedCountsSql, LATE_SQL } from '../taskSql';
-import { likePattern } from './materials';
+import { bool, date, errorBody, int, num, obj, ok, order, pageQuery, paged, projectIdParam, str, strEnum, text } from '../schemas';
+import { blockedCountsSql, lateSql } from '../taskSql';
 
 const projectSummary = obj({
   id: str,
@@ -42,8 +42,57 @@ interface ListQuery {
   order: 'asc' | 'desc';
 }
 
-function checkDates(start?: string, end?: string) {
-  if (start && end && end < start) throw badRequest('plannedEnd must be on or after plannedStart');
+// every project the user can access, with what the projects screen shows; $1 is the user id
+function projectsSql(user: AuthUser, where: string[], lateOnly = false) {
+  // superadmins see every project and act as its admin, everyone else only their memberships
+  const superadmin = user.role === 'superadmin';
+  const from = superadmin
+    ? 'projects p LEFT JOIN project_members pm ON pm.project_id = p.id AND pm.user_id = $1'
+    : 'project_members pm JOIN projects p ON p.id = pm.project_id AND pm.user_id = $1';
+  return `
+    WITH acc AS (
+      SELECT p.id, p.name, p.planned_start, p.planned_end, p.task_total, p.task_done, ${superadmin ? 'true' : 'pm.is_admin'} AS is_admin
+      FROM ${from} ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+    ), open AS (
+      SELECT t.project_id,
+        count(*) FILTER (WHERE t.status = 'not_started') AS not_started,
+        count(*) FILTER (WHERE t.status = 'in_progress') AS in_progress,
+        count(*) FILTER (WHERE ${lateSql('t')}) AS late
+      FROM tasks t WHERE t.status <> 'done' AND t.project_id IN (SELECT id FROM acc)
+      GROUP BY t.project_id
+    ), rows AS (
+      SELECT acc.*, acc.task_total AS total, acc.task_done AS done, coalesce(s.not_started, 0) AS not_started,
+        coalesce(s.in_progress, 0) AS in_progress, coalesce(s.late, 0) AS late,
+        CASE WHEN acc.task_total = 0 THEN 0 ELSE round(acc.task_done * 100.0 / acc.task_total, 1) END AS percent_done
+      FROM acc LEFT JOIN open s ON s.project_id = acc.id
+      ${lateOnly ? 'WHERE coalesce(s.late, 0) > 0' : ''}
+    )
+    SELECT rows.*, count(*) OVER () AS total_count,
+      (SELECT count(*) FROM project_members m WHERE m.project_id = rows.id) AS member_count
+    FROM rows`;
+}
+
+// Blocked counts are worked out for these rows only
+async function summaries(rows: any[]) {
+  const { rows: blocked } = await pool.query(blockedCountsSql, [rows.map((r) => r.id)]);
+  const blockedById = new Map(blocked.map((b) => [b.project_id, b.n]));
+  return rows.map((r) => ({
+    id: projectCode(r.id),
+    name: r.name,
+    plannedStart: r.planned_start,
+    plannedEnd: r.planned_end,
+    isAdmin: r.is_admin,
+    memberCount: r.member_count,
+    taskCounts: { notStarted: r.not_started, inProgress: r.in_progress, done: r.done, total: r.total },
+    percentDone: r.percent_done,
+    lateTasks: r.late,
+    blockedTasks: blockedById.get(r.id) ?? 0,
+  }));
+}
+
+async function projectDetail(user: AuthUser, projectId: number) {
+  const { rows } = await pool.query(projectsSql(user, ['p.id = $2']), [user.id, projectId]);
+  return (await summaries(rows))[0];
 }
 
 export default async function projectRoutes(app: FastifyInstance) {
@@ -61,7 +110,7 @@ export default async function projectRoutes(app: FastifyInstance) {
             q: { type: 'string', maxLength: 200 },
             lateOnly: { type: 'boolean' },
             sort: { ...strEnum(Object.keys(SORTS)), default: 'name' },
-            order: { ...strEnum(['asc', 'desc']), default: 'asc' },
+            order,
           },
         },
         response: { 200: paged(projectSummary) },
@@ -69,61 +118,12 @@ export default async function projectRoutes(app: FastifyInstance) {
     },
     async (req) => {
       const { q, lateOnly, sort, order } = req.query;
-      const { limit, offset } = pageOf(req.query);
       const params: unknown[] = [req.user.id];
       const where: string[] = [];
-      if (q?.trim()) {
-        params.push(likePattern(q));
-        const n = searchNumber(q, /PRJ-/);
-        params.push(n);
-        where.push(`(p.name ILIKE $${params.length - 1} OR p.id = $${params.length})`);
-      }
-      // superadmins see every project, everyone else only their memberships
-      const from =
-        req.user.role === 'superadmin'
-          ? `projects p LEFT JOIN project_members pm ON pm.project_id = p.id AND pm.user_id = $1`
-          : `project_members pm JOIN projects p ON p.id = pm.project_id AND pm.user_id = $1`;
-      const sql = `
-        WITH acc AS (
-          SELECT p.id, p.name, p.planned_start, p.planned_end, p.task_total, p.task_done, coalesce(pm.is_admin, false) AS is_admin
-          FROM ${from} ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
-        ), open AS (
-          SELECT t.project_id,
-            count(*) FILTER (WHERE t.status = 'not_started') AS not_started,
-            count(*) FILTER (WHERE t.status = 'in_progress') AS in_progress,
-            count(*) FILTER (WHERE ${LATE_SQL('t')}) AS late
-          FROM tasks t WHERE t.status <> 'done' AND t.project_id IN (SELECT id FROM acc)
-          GROUP BY t.project_id
-        ), rows AS (
-          SELECT acc.*, acc.task_total AS total, acc.task_done AS done, coalesce(s.not_started, 0) AS not_started,
-            coalesce(s.in_progress, 0) AS in_progress, coalesce(s.late, 0) AS late,
-            CASE WHEN acc.task_total = 0 THEN 0 ELSE round(acc.task_done * 100.0 / acc.task_total, 1) END AS percent_done
-          FROM acc LEFT JOIN open s ON s.project_id = acc.id
-          ${lateOnly ? 'WHERE coalesce(s.late, 0) > 0' : ''}
-        )
-        SELECT rows.*, count(*) OVER () AS total_count,
-          (SELECT count(*) FROM project_members m WHERE m.project_id = rows.id) AS member_count
-        FROM rows
-        ORDER BY ${SORTS[sort]} ${order === 'desc' ? 'DESC' : 'ASC'}, id`;
-      const { rows, total } = await pagedRows(sql, params, limit, offset);
-      const blocked = await blockedCounts(rows.map((r) => r.id));
-      return {
-        items: rows.map((r) => ({
-          id: projectCode(r.id),
-          name: r.name,
-          plannedStart: r.planned_start,
-          plannedEnd: r.planned_end,
-          isAdmin: r.is_admin,
-          memberCount: r.member_count,
-          taskCounts: { notStarted: r.not_started, inProgress: r.in_progress, done: r.done, total: r.total },
-          percentDone: r.percent_done,
-          lateTasks: r.late,
-          blockedTasks: blocked.get(r.id) ?? 0,
-        })),
-        page: req.query.page,
-        pageSize: req.query.pageSize,
-        total,
-      };
+      if (q?.trim()) where.push(`(p.name ILIKE $${params.push(likePattern(q))} OR p.id = $${params.push(searchNumber(q, /PRJ-/))})`);
+      const sql = `${projectsSql(req.user, where, lateOnly)} ORDER BY ${SORTS[sort]} ${order.toUpperCase()}, id`;
+      const { rows, total } = await pagedRows(sql, params, req.query);
+      return { items: await summaries(rows), page: req.query.page, pageSize: req.query.pageSize, total };
     },
   );
 
@@ -150,16 +150,16 @@ export default async function projectRoutes(app: FastifyInstance) {
         await c.query(`INSERT INTO project_members (project_id, user_id, is_admin) VALUES ($1, $2, true)`, [id, req.user.id]);
         return id;
       });
-      return reply.status(201).send(await projectDetail(id, req.user.id));
+      return reply.status(201).send(await projectDetail(req.user, id));
     },
   );
 
   app.get<{ Params: { projectId: string } }>(
     '/projects/:projectId',
-    { schema: { tags: ['projects'], summary: 'One project', params: projectIdParam, response: { 200: projectSummary, 404: errorBody } } },
+    { schema: { tags: ['projects'], summary: 'One project', params: projectIdParam(), response: { 200: projectSummary, 404: errorBody } } },
     async (req) => {
       const { projectId } = await projectAccess(pool, req.user, req.params.projectId);
-      return projectDetail(projectId, req.user.id);
+      return projectDetail(req.user, projectId);
     },
   );
 
@@ -169,27 +169,25 @@ export default async function projectRoutes(app: FastifyInstance) {
       schema: {
         tags: ['projects'],
         summary: 'Edit a project (project admins)',
-        params: projectIdParam,
+        params: projectIdParam(),
         body: { ...obj(projectBody, []), minProperties: 1 },
         response: { 200: projectSummary, 400: errorBody, 403: errorBody, 404: errorBody },
       },
     },
     async (req) => {
       const { name, plannedStart, plannedEnd } = req.body;
-      checkDates(plannedStart, plannedEnd);
       const projectId = await tx(async (c) => {
         const { projectId } = await projectAdmin(c, req.user, req.params.projectId, true);
+        const { rows } = await c.query('SELECT planned_start, planned_end FROM projects WHERE id = $1', [projectId]);
+        checkDates(plannedStart ?? rows[0].planned_start, plannedEnd ?? rows[0].planned_end);
         await c.query(
           `UPDATE projects SET name = coalesce($2, name), planned_start = coalesce($3, planned_start), planned_end = coalesce($4, planned_end)
            WHERE id = $1`,
           [projectId, name?.trim() ?? null, plannedStart ?? null, plannedEnd ?? null],
-        ).catch((e) => {
-          if (e.code === '23514') throw badRequest('plannedEnd must be on or after plannedStart');
-          throw e;
-        });
+        );
         return projectId;
       });
-      return projectDetail(projectId, req.user.id);
+      return projectDetail(req.user, projectId);
     },
   );
 
@@ -200,7 +198,7 @@ export default async function projectRoutes(app: FastifyInstance) {
         tags: ['projects'],
         summary: 'Remove a project (project admins)',
         description: 'Refused with 409 while the project store holds stock or a delivery is in transit, so no material disappears.',
-        params: projectIdParam,
+        params: projectIdParam(),
         response: { 200: ok, 403: errorBody, 404: errorBody, 409: errorBody },
       },
     },
@@ -219,43 +217,4 @@ export default async function projectRoutes(app: FastifyInstance) {
       return { ok: true };
     },
   );
-}
-
-async function blockedCounts(projectIds: number[]) {
-  const out = new Map<number, number>();
-  if (!projectIds.length) return out;
-  const { rows } = await pool.query(blockedCountsSql, [projectIds]);
-  for (const r of rows) out.set(r.project_id, r.n);
-  return out;
-}
-
-async function projectDetail(projectId: number, userId: number) {
-  const { rows } = await pool.query(
-    `SELECT p.id, p.name, p.planned_start, p.planned_end,
-       coalesce((SELECT is_admin FROM project_members WHERE project_id = p.id AND user_id = $2), false) AS is_admin,
-       (SELECT count(*) FROM project_members WHERE project_id = p.id) AS member_count,
-       p.task_total AS total, p.task_done AS done, s.*
-     FROM projects p,
-     LATERAL (SELECT
-       count(*) FILTER (WHERE t.status = 'not_started') AS not_started,
-       count(*) FILTER (WHERE t.status = 'in_progress') AS in_progress,
-       count(*) FILTER (WHERE ${LATE_SQL('t')}) AS late
-       FROM tasks t WHERE t.project_id = p.id AND t.status <> 'done') s
-     WHERE p.id = $1`,
-    [projectId, userId],
-  );
-  const r = rows[0];
-  const blocked = await blockedCounts([projectId]);
-  return {
-    id: projectCode(r.id),
-    name: r.name,
-    plannedStart: r.planned_start,
-    plannedEnd: r.planned_end,
-    isAdmin: r.is_admin,
-    memberCount: r.member_count,
-    taskCounts: { notStarted: r.not_started, inProgress: r.in_progress, done: r.done, total: r.total },
-    percentDone: r.total ? Math.round((r.done * 1000) / r.total) / 10 : 0,
-    lateTasks: r.late,
-    blockedTasks: blocked.get(projectId) ?? 0,
-  };
 }

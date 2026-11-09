@@ -63,7 +63,7 @@ SELECT sp.id, pg_temp.slot_user(sp.id, i), i = 1 OR (i = 2 AND sp.member_count >
   sp.planned_start - 30 + (i % 20)
 FROM seed_projects sp, generate_series(1, sp.member_count) i;
 
--- the demo user is in about 40 projects, admin of some, and in the big ones
+-- the demo user is in 54 projects, admin of some, and in the big ones
 INSERT INTO project_members (project_id, user_id, is_admin, joined_at)
 SELECT id, 3, id % 120 = 0, planned_start FROM seed_projects WHERE id % 60 = 0 OR id % 200 = 170 OR id IN (1990, 1995)
 ON CONFLICT (project_id, user_id) DO UPDATE SET is_admin = EXCLUDED.is_admin OR project_members.is_admin;

@@ -3,11 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "description": "SiteTrack backend API",
-  "main": "dist/server.js",
   "scripts": {
     "build": "tsc",
-    "start": "node dist/server.js",
-    "dev": "tsc && node dist/server.js"
+    "start": "node dist/server.js"
   },
   "dependencies": {
     "@fastify/swagger": "^9.9.3",

@@ -1,19 +1,18 @@
 import type { FastifyInstance } from 'fastify';
 import type { PoolClient } from 'pg';
-import { pagedRows, pool, tx, type Db } from '../db';
+import { likePattern, pagedRows, pool, tx, type Db } from '../db';
 import { projectAccess } from '../access';
 import type { AuthUser } from '../auth';
-import { badRequest, conflict, notFound } from '../errors';
+import { checkDates, conflict, notFound } from '../errors';
 import { parseTaskNumber, searchNumber, taskCode } from '../ids';
-import { arr, bool, date, errorBody, int, obj, ok, pageOf, pageQuery, paged, str, strEnum, text } from '../schemas';
-import { LATE_SQL, notDoneUpstreamSql, startedDownstreamSql, waitingCte, wouldCycleSql } from '../taskSql';
-import { likePattern } from './materials';
+import { arr, bool, date, errorBody, int, obj, ok, order, pageQuery, paged, projectIdParam, str, strEnum, text } from '../schemas';
+import { lateSql, notDoneUpstreamSql, startedDownstreamSql, waitingCte, wouldCycleSql } from '../taskSql';
 
 const STATUSES = ['not_started', 'in_progress', 'done'];
 const ACTIONS = ['start', 'done', 'reopen'];
+const MOVES: Record<string, [string, string]> = { start: ['not_started', 'in_progress'], done: ['in_progress', 'done'], reopen: ['done', 'in_progress'] };
 
-const taskParams = obj({ projectId: { type: 'string', example: 'PRJ-0042' }, taskId: { type: 'string', example: 'PRJ-0042-T-0137' } });
-const projectParams = obj({ projectId: { type: 'string', example: 'PRJ-0042' } });
+const taskParams = projectIdParam({ taskId: { type: 'string', example: 'PRJ-0042-T-0137' } });
 
 const taskItem = obj({
   id: str,
@@ -69,7 +68,7 @@ async function findTask(db: Db, projectId: number, taskParam: string) {
   const n = parseTaskNumber(taskParam, projectId);
   if (n === null) throw notFound('Task not found');
   const { rows } = await db.query(
-    `SELECT t.id, t.number, t.name, t.planned_start, t.planned_end, t.status, ${LATE_SQL('t')} AS late
+    `SELECT t.id, t.number, t.name, t.planned_start, t.planned_end, t.status, ${lateSql('t')} AS late
      FROM tasks t WHERE t.project_id = $1 AND t.number = $2`,
     [projectId, n],
   );
@@ -94,7 +93,8 @@ function walk(edges: Map<number, number[]>, start: number) {
   return steps;
 }
 
-async function loadTaskDetail(projectId: number, task: any) {
+async function loadTaskDetail(projectId: number, taskParam: string) {
+  const task = await findTask(pool, projectId, taskParam);
   const { rows: edges } = await pool.query('SELECT task_id, depends_on_id FROM task_dependencies WHERE project_id = $1', [projectId]);
   const up = new Map<number, number[]>();
   const down = new Map<number, number[]>();
@@ -106,12 +106,14 @@ async function loadTaskDetail(projectId: number, task: any) {
   const downSteps = walk(down, task.id);
   const ids = [...upSteps.keys(), ...downSteps.keys()];
   const { rows } = await pool.query(
-    `SELECT t.id, t.number, t.name, t.status, ${LATE_SQL('t')} AS late FROM tasks t WHERE t.id = ANY($1)`,
+    `SELECT t.id, t.number, t.name, t.status, ${lateSql('t')} AS late FROM tasks t WHERE t.id = ANY($1)`,
     [ids],
   );
   const byId = new Map(rows.map((r) => [r.id, r]));
   const related = (steps: Map<number, number>) =>
+    // a task removed since the edges were read drops out instead of breaking the page
     [...steps.entries()]
+      .filter(([id]) => byId.has(id))
       .map(([id, s]) => {
         const r = byId.get(id);
         return { id: taskCode(projectId, r.number), name: r.name, status: r.status, late: r.late, steps: s, number: r.number };
@@ -138,10 +140,6 @@ async function loadTaskDetail(projectId: number, task: any) {
   };
 }
 
-function checkDates(start?: string, end?: string) {
-  if (start && end && end < start) throw badRequest('plannedEnd must be on or after plannedStart');
-}
-
 export default async function taskRoutes(app: FastifyInstance) {
   app.get<{ Params: { projectId: string }; Querystring: ListQuery }>(
     '/projects/:projectId/tasks',
@@ -151,7 +149,7 @@ export default async function taskRoutes(app: FastifyInstance) {
         summary: 'Project tasks screen',
         description:
           'from/to keep tasks whose planned period overlaps that range. q matches the name or the ID (PRJ-0042-T-0137, T-0137 or 137).',
-        params: projectParams,
+        params: projectIdParam(),
         querystring: {
           type: 'object',
           properties: {
@@ -163,7 +161,7 @@ export default async function taskRoutes(app: FastifyInstance) {
             from: date,
             to: date,
             sort: { ...strEnum(Object.keys(SORTS)), default: 'id' },
-            order: { ...strEnum(['asc', 'desc']), default: 'asc' },
+            order,
           },
         },
         response: { 200: paged(taskItem), 404: errorBody },
@@ -172,30 +170,24 @@ export default async function taskRoutes(app: FastifyInstance) {
     async (req) => {
       const { projectId } = await projectAccess(pool, req.user, req.params.projectId);
       const { q, status, late, blocked, from, to, sort, order } = req.query;
-      const { limit, offset } = pageOf(req.query);
       const params: unknown[] = [projectId];
       const where: string[] = [];
-      const add = (cond: (p: string) => string, value: unknown) => {
-        params.push(value);
-        where.push(cond(`$${params.length}`));
-      };
       if (q?.trim()) {
         const n = searchNumber(q, new RegExp(`PRJ-0*${projectId}-T-|T-`));
-        params.push(likePattern(q), n);
-        where.push(`(name ILIKE $${params.length - 1} OR number = $${params.length})`);
+        where.push(`(name ILIKE $${params.push(likePattern(q))} OR number = $${params.push(n)})`);
       }
-      if (status) add((p) => `status = ${p}::task_status`, status);
+      if (status) where.push(`status = $${params.push(status)}::task_status`);
       if (late !== undefined) where.push(late ? 'late' : 'NOT late');
       if (blocked !== undefined) where.push(blocked ? 'blocked' : 'NOT blocked');
-      if (from) add((p) => `planned_end >= ${p}::date`, from);
-      if (to) add((p) => `planned_start <= ${p}::date`, to);
+      if (from) where.push(`planned_end >= $${params.push(from)}::date`);
+      if (to) where.push(`planned_start <= $${params.push(to)}::date`);
       const sql = `
         WITH RECURSIVE ${waitingCte('u.project_id = $1')},
         dependents AS (
           SELECT depends_on_id AS id, count(*)::int AS n FROM task_dependencies WHERE project_id = $1 GROUP BY depends_on_id
         ), rows AS (
           SELECT t.id, t.number, t.name, t.planned_start, t.planned_end, t.status,
-            ${LATE_SQL('t')} AS late,
+            ${lateSql('t')} AS late,
             (t.status <> 'done' AND t.id IN (SELECT id FROM waiting)) AS blocked,
             coalesce(dc.n, 0) AS dependent_count
           FROM tasks t LEFT JOIN dependents dc ON dc.id = t.id
@@ -203,8 +195,8 @@ export default async function taskRoutes(app: FastifyInstance) {
         )
         SELECT *, count(*) OVER () AS total_count FROM rows
         ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
-        ORDER BY ${SORTS[sort]} ${order === 'desc' ? 'DESC' : 'ASC'}, number`;
-      const { rows, total } = await pagedRows(sql, params, limit, offset);
+        ORDER BY ${SORTS[sort]} ${order.toUpperCase()}, number`;
+      const { rows, total } = await pagedRows(sql, params, req.query);
       const { rows: deps } = await pool.query(
         `SELECT d.task_id, array_agg(u.number ORDER BY u.number) AS numbers
          FROM task_dependencies d JOIN tasks u ON u.id = d.depends_on_id
@@ -237,7 +229,7 @@ export default async function taskRoutes(app: FastifyInstance) {
       schema: {
         tags: ['tasks'],
         summary: 'Create a task; it starts as not_started',
-        params: projectParams,
+        params: projectIdParam(),
         body: obj({ name: text(300), plannedStart: date, plannedEnd: date }),
         response: { 201: taskDetail, 400: errorBody, 404: errorBody },
       },
@@ -254,8 +246,7 @@ export default async function taskRoutes(app: FastifyInstance) {
         );
         return { projectId, number: rows[0].task_counter as number };
       });
-      const task = await findTask(pool, projectId, String(number));
-      return reply.status(201).send(await loadTaskDetail(projectId, task));
+      return reply.status(201).send(await loadTaskDetail(projectId, taskCode(projectId, number)));
     },
   );
 
@@ -271,7 +262,7 @@ export default async function taskRoutes(app: FastifyInstance) {
     },
     async (req) => {
       const { projectId } = await projectAccess(pool, req.user, req.params.projectId);
-      return loadTaskDetail(projectId, await findTask(pool, projectId, req.params.taskId));
+      return loadTaskDetail(projectId, req.params.taskId);
     },
   );
 
@@ -299,7 +290,7 @@ export default async function taskRoutes(app: FastifyInstance) {
         );
         return projectId;
       });
-      return loadTaskDetail(projectId, await findTask(pool, projectId, req.params.taskId));
+      return loadTaskDetail(projectId, req.params.taskId);
     },
   );
 
@@ -331,8 +322,7 @@ export default async function taskRoutes(app: FastifyInstance) {
   const transition = async (c: PoolClient, user: AuthUser, params: TaskParams, action: string) => {
     const { projectId } = await projectAccess(c, user, params.projectId, true);
     const task = await findTask(c, projectId, params.taskId);
-    const from = { start: 'not_started', done: 'in_progress', reopen: 'done' }[action]!;
-    const to = { start: 'in_progress', done: 'done', reopen: 'in_progress' }[action]!;
+    const [from, to] = MOVES[action];
     if (task.status !== from) throw conflict('invalid_transition', `Cannot ${action} a task that is ${task.status}`);
     if (action === 'start' && (await c.query(notDoneUpstreamSql, [task.id])).rows[0].n > 0)
       throw conflict('blocked', 'Every task this one waits on must be done first');
@@ -360,7 +350,7 @@ export default async function taskRoutes(app: FastifyInstance) {
       },
       async (req) => {
         const projectId = await tx((c) => transition(c, req.user, req.params, action));
-        return loadTaskDetail(projectId, await findTask(pool, projectId, req.params.taskId));
+        return loadTaskDetail(projectId, req.params.taskId);
       },
     );
   }
@@ -392,7 +382,7 @@ export default async function taskRoutes(app: FastifyInstance) {
         );
         return projectId;
       });
-      return loadTaskDetail(projectId, await findTask(pool, projectId, req.params.taskId));
+      return loadTaskDetail(projectId, req.params.taskId);
     },
   );
 
@@ -402,7 +392,7 @@ export default async function taskRoutes(app: FastifyInstance) {
       schema: {
         tags: ['tasks'],
         summary: 'Stop this task waiting on another task',
-        params: obj({ projectId: str, taskId: str, dependsOnId: { type: 'string', example: 'PRJ-0042-T-0136' } }),
+        params: projectIdParam({ taskId: str, dependsOnId: { type: 'string', example: 'PRJ-0042-T-0136' } }),
         response: { 200: taskDetail, 404: errorBody },
       },
     },
@@ -415,7 +405,7 @@ export default async function taskRoutes(app: FastifyInstance) {
         if (!rowCount) throw notFound('Dependency not found');
         return projectId;
       });
-      return loadTaskDetail(projectId, await findTask(pool, projectId, req.params.taskId));
+      return loadTaskDetail(projectId, req.params.taskId);
     },
   );
 }

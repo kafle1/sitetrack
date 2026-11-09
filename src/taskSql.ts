@@ -1,6 +1,6 @@
 // Late and Blocked are never stored; they are worked out from today's date and the graph on every read
 
-export const LATE_SQL = (t: string) =>
+export const lateSql = (t: string) =>
   `(${t}.status <> 'done' AND (${t}.planned_end < current_date OR (${t}.status = 'not_started' AND ${t}.planned_start < current_date)))`;
 
 // "waiting": every task downstream of a not-done task. A task is Blocked when it is not done and in this set.

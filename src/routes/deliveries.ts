@@ -1,12 +1,11 @@
 import type { FastifyInstance } from 'fastify';
-import { pagedRows, pool, tx } from '../db';
+import { likePattern, pageOf, pagedRows, pool, tx } from '../db';
 import { canUseCompanyStore, lockProject, projectAccess, requireCompanyStore } from '../access';
 import type { AuthUser } from '../auth';
-import { badRequest, conflict, forbidden, notFound } from '../errors';
+import { HttpError, badRequest, conflict, forbidden, notFound } from '../errors';
 import { parseProjectId, projectCode, searchNumber } from '../ids';
-import { arr, date, dateTime, errorBody, idIn, int, nullable, num, obj, pageOf, pageQuery, paged, str, strEnum, userRef } from '../schemas';
-import { addStock, takeStock, type Line } from '../stock';
-import { likePattern } from './materials';
+import { arr, date, dateTime, errorBody, idIn, int, nullable, num, obj, pageQuery, paged, projectIdField, projectIdParam, quantity, ref, str, strEnum, userRef } from '../schemas';
+import { addStock, insertLines, takeStock, type Line } from '../stock';
 
 const DIRECTIONS = ['to_project', 'to_company'];
 const STATUSES = ['in_transit', 'delivered', 'rejected', 'cancelled'];
@@ -30,7 +29,7 @@ const linesBody = {
   type: 'array',
   minItems: 1,
   maxItems: 200,
-  items: obj({ materialId: idIn, quantity: { type: 'number', exclusiveMinimum: 0, maximum: 1e9, multipleOf: 0.001 } }),
+  items: obj({ materialId: idIn, quantity }),
 };
 
 interface ListQuery {
@@ -65,13 +64,12 @@ async function shape(rows: any[]) {
     [ids],
   );
   const lineMap = new Map(lines.map((l) => [l.delivery_id, l.lines]));
-  const ref = (id: number | null, name: string | null) => (id ? { id, name: name! } : null);
   return rows.map((r) => ({
     id: r.id,
     project: { id: projectCode(r.project_id), name: r.project_name },
     direction: r.direction,
     status: r.status,
-    lines: (lineMap.get(r.id) ?? []).map((l: any) => ({ ...l, quantity: Number(l.quantity) })),
+    lines: lineMap.get(r.id) ?? [],
     note: r.note,
     sentAt: r.sent_at,
     sentBy: ref(r.sent_by, r.sent_by_name),
@@ -114,17 +112,17 @@ async function loadOne(id: number) {
   return (await shape(rows))[0];
 }
 
+// answers a project's 404 with err instead, and lets every other error through
+const projectMissing = (err: HttpError) => (e: unknown) => {
+  throw e instanceof HttpError && e.status === 404 ? err : e;
+};
+
 // a delivery is visible to the company store side and to members of its project
 async function visibleDelivery(user: AuthUser, id: number) {
-  const { rows } = await pool.query('SELECT id, project_id, direction, status FROM deliveries WHERE id = $1', [id]);
+  const { rows } = await pool.query('SELECT id, project_id, direction FROM deliveries WHERE id = $1', [id]);
   const d = rows[0];
   if (!d) throw notFound('Delivery not found');
-  let member = false;
-  try {
-    await projectAccess(pool, user, projectCode(d.project_id));
-    member = true;
-  } catch {}
-  if (!member && !canUseCompanyStore(user)) throw notFound('Delivery not found');
+  if (!canUseCompanyStore(user)) await projectAccess(pool, user, projectCode(d.project_id)).catch(projectMissing(notFound('Delivery not found')));
   return d;
 }
 
@@ -135,7 +133,7 @@ export default async function deliveryRoutes(app: FastifyInstance) {
       schema: {
         tags: ['company store'],
         summary: 'Company store deliveries screen, newest first (company store managers and SuperAdmins)',
-        querystring: { type: 'object', properties: { ...filterProps, projectId: { type: 'string', example: 'PRJ-0042' } } },
+        querystring: { type: 'object', properties: { ...filterProps, projectId: projectIdField } },
         response: { 200: paged(delivery), 403: errorBody },
       },
     },
@@ -162,19 +160,10 @@ export default async function deliveryRoutes(app: FastifyInstance) {
     },
     async (req) => {
       requireCompanyStore(req.user);
-      const { limit, offset } = pageOf(req.query);
+      const { q } = req.query;
       const params: unknown[] = [];
-      let w = '';
-      if (req.query.q?.trim()) {
-        w = `WHERE name ILIKE $1 OR id = $2`;
-        params.push(likePattern(req.query.q), searchNumber(req.query.q, /PRJ-/));
-      }
-      const { rows, total } = await pagedRows(
-        `SELECT id, name, count(*) OVER () AS total_count FROM projects ${w} ORDER BY name, id`,
-        params,
-        limit,
-        offset,
-      );
+      const w = q?.trim() ? `WHERE name ILIKE $${params.push(likePattern(q))} OR id = $${params.push(searchNumber(q, /PRJ-/))}` : '';
+      const { rows, total } = await pagedRows(`SELECT id, name, count(*) OVER () AS total_count FROM projects ${w} ORDER BY name, id`, params, req.query);
       return { items: rows.map((r) => ({ id: projectCode(r.id), name: r.name })), page: req.query.page, pageSize: req.query.pageSize, total };
     },
   );
@@ -186,7 +175,7 @@ export default async function deliveryRoutes(app: FastifyInstance) {
         tags: ['company store'],
         summary: 'Send materials from the company store to a project store (company store managers and SuperAdmins)',
         description: 'The quantities leave company stock at once and the delivery is in_transit. 409 insufficient_stock when any line is short; nothing moves then.',
-        body: obj({ projectId: { type: 'string', example: 'PRJ-0042' }, lines: linesBody, note: { type: 'string', maxLength: 1000 } }, ['projectId', 'lines']),
+        body: obj({ projectId: projectIdField, lines: linesBody, note: { type: 'string', maxLength: 1000 } }, ['projectId', 'lines']),
         response: { 201: delivery, 400: errorBody, 403: errorBody, 404: errorBody, 409: errorBody },
       },
     },
@@ -217,7 +206,7 @@ export default async function deliveryRoutes(app: FastifyInstance) {
       schema: {
         tags: ['project store'],
         summary: 'Project deliveries screen: incoming and outgoing, newest first',
-        params: obj({ projectId: { type: 'string', example: 'PRJ-0042' } }),
+        params: projectIdParam(),
         querystring: { type: 'object', properties: filterProps },
         response: { 200: paged(delivery), 404: errorBody },
       },
@@ -235,7 +224,7 @@ export default async function deliveryRoutes(app: FastifyInstance) {
         tags: ['project store'],
         summary: 'Send materials from this project store back to the company store (project members)',
         description: 'Project stores never deliver to each other; the receiver is always the company store.',
-        params: obj({ projectId: { type: 'string', example: 'PRJ-0042' } }),
+        params: projectIdParam(),
         body: obj({ lines: linesBody, note: { type: 'string', maxLength: 1000 } }, ['lines']),
         response: { 201: delivery, 400: errorBody, 404: errorBody, 409: errorBody },
       },
@@ -294,20 +283,18 @@ export default async function deliveryRoutes(app: FastifyInstance) {
         await tx(async (c) => {
           // membership is read under the project lock, so someone removed a moment ago can't answer
           if (projectSide)
-            await projectAccess(c, req.user, projectCode(d.project_id), true).catch(() => {
-              throw forbidden('Only members of this project can do this');
-            });
+            await projectAccess(c, req.user, projectCode(d.project_id), true).catch(projectMissing(forbidden('Only members of this project can do this')));
           // the row lock plus the status check means two people answering at once can't both move stock
           const { rows } = await c.query('SELECT status FROM deliveries WHERE id = $1 FOR UPDATE', [d.id]);
+          // gone when its project was removed since visibleDelivery read it
+          if (!rows[0]) throw notFound('Delivery not found');
           if (rows[0].status !== 'in_transit') throw conflict('not_in_transit', `This delivery is already ${rows[0].status}`);
           const { rows: lines } = await c.query(
             'SELECT material_id AS "materialId", quantity FROM delivery_lines WHERE delivery_id = $1 ORDER BY material_id',
             [d.id],
           );
-          const projectStore = d.project_id as number;
-          const receiver = d.direction === 'to_project' ? projectStore : null;
-          const sender = d.direction === 'to_project' ? null : projectStore;
-          await addStock(c, action === 'record' ? receiver : sender, lines);
+          // record puts the stock at the receiver; reject and cancel send it back to the sender
+          await addStock(c, (d.direction === 'to_project') === (action === 'record') ? d.project_id : null, lines);
           const cols = action === 'cancel' ? 'cancelled_by = $3, cancelled_at = now()' : 'received_by = $3, received_at = now()';
           await c.query(`UPDATE deliveries SET status = $2, ${cols} WHERE id = $1`, [d.id, a.status, req.user.id]);
         });
@@ -315,11 +302,4 @@ export default async function deliveryRoutes(app: FastifyInstance) {
       },
     );
   }
-}
-
-async function insertLines(c: { query: (q: string, p: unknown[]) => Promise<unknown> }, deliveryId: number, lines: Line[]) {
-  await c.query(
-    `INSERT INTO delivery_lines (delivery_id, material_id, quantity) SELECT $1, id, qty FROM unnest($2::int[], $3::numeric[]) AS l(id, qty)`,
-    [deliveryId, lines.map((l) => l.materialId), lines.map((l) => l.quantity)],
-  );
 }

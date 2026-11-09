@@ -15,7 +15,7 @@ That starts Postgres and the API. The API applies its database migrations on sta
 - API: http://localhost:8080
 - API docs (Swagger UI): http://localhost:8080/docs
 - OpenAPI file: [`docs/openapi.json`](docs/openapi.json), the same document the API serves at `/docs/json`
-- Postgres is also published on host port 54330 (user, password and database are all `sitetrack`), so you can poke at it with `psql`.
+- Postgres is also published on localhost port 54330, not to the network (user, password and database are all `sitetrack`), so you can poke at it with `psql`.
 
 ### Loading data at the brief's scale
 
@@ -60,7 +60,7 @@ curl -s "localhost:8080/projects/PRJ-1770/tasks?blocked=true" -H "authorization:
 
 ## The API in short
 
-The full reference is the Swagger UI at `/docs`. Every list takes `page` and `pageSize` (up to 200) and answers `{ items, page, pageSize, total }`. Errors always look like `{ "error": "code", "message": "text" }`.
+The full reference is the Swagger UI at `/docs`. Every paged list takes `page` and `pageSize` (up to 200) and answers `{ items, page, pageSize, total }`. Members and material categories come back whole, and notifications add `unreadCount`. Errors always look like `{ "error": "code", "message": "text" }`.
 
 | Screen | Endpoints |
 |---|---|
@@ -70,7 +70,7 @@ The full reference is the Swagger UI at `/docs`. Every list takes `page` and `pa
 | 5. Project tasks | `GET /projects/{projectId}/tasks`, `POST /projects/{projectId}/tasks` |
 | 6. Task details | `GET/PATCH/DELETE .../tasks/{taskId}`, `POST .../tasks/{taskId}/start`, `/done`, `/reopen`, `POST .../tasks/{taskId}/dependencies`, `DELETE .../tasks/{taskId}/dependencies/{dependsOnId}` |
 | 7. Project store | `GET /projects/{projectId}/store` |
-| 8. Project deliveries | `GET /projects/{projectId}/deliveries`, `POST /projects/{projectId}/deliveries` (send back to the company store), `POST /deliveries/{id}/record`, `/reject`, `/cancel` |
+| 8. Project deliveries | `GET /projects/{projectId}/deliveries`, `POST /projects/{projectId}/deliveries` (send back to the company store), `GET /deliveries/{id}`, `POST /deliveries/{id}/record`, `/reject`, `/cancel` |
 | 9. Project members | `GET /projects/{projectId}/members`, `POST /projects/{projectId}/invitations`, `DELETE /projects/{projectId}/invitations/{id}`, `PATCH /projects/{projectId}/members/{userId}`, `DELETE /projects/{projectId}/members/{userId}` |
 | 10. Company stock | `GET /company-store/stock`, `POST /company-store/stock/{materialId}/add`, `PATCH /company-store/stock/{materialId}` |
 | 11. Company deliveries | `GET /company-store/deliveries`, `POST /company-store/deliveries`, `GET /company-store/projects` (project picker) |
@@ -98,7 +98,7 @@ The app role comes from the session lookup and the project membership comes from
 
 ### Roles
 
-SuperAdmins act as project admins on every project, without being members. Company store managers see the company store, every delivery, and a list of project IDs and names so they can pick where to send things. They don't see inside projects they are not members of.
+SuperAdmins act as project admins on every project, without being members, and the projects screen shows them as admin of each one. Company store managers see the company store, every delivery, and a list of project IDs and names so they can pick where to send things. They don't see inside projects they are not members of.
 
 ### IDs
 
@@ -115,11 +115,13 @@ The three actions (`start`, `done`, `reopen`) each check the current status and 
 - Mark as done needs In progress.
 - Reopen needs every task that waits on it, directly or not, to still be Not started.
 
-Anything else is a `409`. The lock stops a Start and a Reopen next door from both passing their checks at once.
+Anything else is a `409`. The lock stops a Start and a Reopen next door from both passing their checks at once. A task that gained a dependency after it started can still be marked Done while Blocked, because the brief allows Done from any In progress task.
+
+The Start, Reopen and cycle checks walk the graph with plain recursive queries, and at full scale they stay on the indexes. On `PRJ-1770` the Start check over 809 upstream tasks takes 3 ms in the database, the Reopen check over 2,997 downstream tasks 5 ms, and the cycle check 2 ms. So they don't need the `OFFSET 0` trick the Blocked walk needed.
 
 ### Late and Blocked are never stored
 
-They are worked out on every read from `current_date` and the graph. Blocked is the tricky one. Following the brief, a task is Blocked when it is not done and any task it reaches upstream is not done. That is not the same as "a direct dependency is not done or Blocked". A Done task can still sit downstream of a not-done task when a dependency was added after it was finished, and Done tasks are never flagged Blocked. So the "is a direct dependency blocked" shortcut would miss the chain. I compute it the other way round. I start from every not-done task, walk downstream with a recursive query, and every task reached is waiting on something. The not-done ones among them are Blocked. Each task is visited once, so a 3,000-task project takes a few milliseconds.
+They are worked out on every read from `current_date` and the graph. The database runs in the company's timezone (`Asia/Muscat` in `docker-compose.yml`), so Late and the date filters follow the company's local date, not UTC. Blocked is the tricky one. Following the brief, a task is Blocked when it is not done and any task it reaches upstream is not done. That is not the same as "a direct dependency is not done or Blocked". A Done task can still sit downstream of a not-done task when a dependency was added after it was finished, and Done tasks are never flagged Blocked. So the "is a direct dependency blocked" shortcut would miss the chain. I compute it the other way round. I start from every not-done task, walk downstream with a recursive query, and every task reached is waiting on something. The not-done ones among them are Blocked. Each task is visited once, so the walk over `PRJ-1970`, 3,000 tasks with almost all of them open, takes about 8 ms in the database.
 
 ### Adding dependencies to tasks that already started
 
@@ -171,44 +173,44 @@ These are the final numbers. Each is the median of three warm requests over HTTP
 
 | Screen | Request | Time |
 |---|---|---|
-| Log in | `POST /auth/login` (one scrypt hash, same for an unknown email) | about 50 ms |
-| Notifications | `GET /notifications` | 8 ms |
-| Notifications | `GET /notifications/unread-count` | 6 ms |
-| Projects, user | `GET /projects` | 31 ms |
-| Projects, user | `GET /projects?sort=lateTasks&order=desc` | 21 ms |
-| Projects, SuperAdmin (all 2,000) | `GET /projects` | 44 ms |
-| Projects, SuperAdmin | `?sort=lateTasks&order=desc` | 46 ms |
-| Projects, SuperAdmin | `?sort=percentDone&order=desc&page=10` | 39 ms |
-| Projects, SuperAdmin | `?sort=startDate&order=desc` | 80 ms |
-| Projects, SuperAdmin | `?lateOnly=true` | 41 ms |
-| Projects, SuperAdmin | `?q=riverside` | 21 ms |
-| Projects, SuperAdmin | `?sort=startDate&order=desc&pageSize=200` (worst case) | 232 ms |
-| Project tasks, 3,000 tasks | `GET /projects/PRJ-1770/tasks` | 20 ms |
-| Project tasks | `?sort=dependents&order=desc` | 20 ms |
-| Project tasks | `?blocked=true` | 22 ms |
-| Project tasks | `?late=true&sort=endDate` | 21 ms |
-| Project tasks | `?q=slab` | 22 ms |
-| Project tasks | `?from=2026-01-01&to=2026-03-01&page=2` | 19 ms |
-| Project tasks, mostly open | `GET /projects/PRJ-1970/tasks?blocked=true&sort=dependents&order=desc` | 29 ms |
-| Task details | `PRJ-1770-T-3000` (1,500 tasks upstream, 83 KB) | 16 ms |
-| Task details | `PRJ-1770-T-1500` | 19 ms |
-| Project store | `GET /projects/PRJ-1770/store?sort=lastDelivery&order=desc` | 7 ms |
-| Project store | `?q=cement&sort=quantity` | 8 ms |
-| Project deliveries | `GET /projects/PRJ-1770/deliveries` | 21 ms |
-| Project deliveries | `?direction=to_company&status=delivered` | 17 ms |
-| Project members | `GET /projects/PRJ-1770/members` | 5 ms |
-| Company stock (20,000 materials) | `GET /company-store/stock` | 41 ms |
-| Company stock | `?sort=status` | 38 ms |
-| Company stock | `?status=low_stock&category=Steel` | 23 ms |
-| Company stock | `?page=300` | 60 ms |
-| Company deliveries (400,000) | `GET /company-store/deliveries` | 42 ms |
-| Company deliveries | `?status=in_transit` | 11 ms |
-| Company deliveries | `?projectId=PRJ-1770` | 11 ms |
-| Company deliveries | `?from=2023-01-01&to=2023-01-31` | 19 ms |
-| Company deliveries | `?page=2000` | 35 ms |
+| Log in | `POST /auth/login` (one scrypt hash, same for an unknown email) | about 28 ms |
+| Notifications | `GET /notifications` | 3 ms |
+| Notifications | `GET /notifications/unread-count` | 1 ms |
+| Projects, user | `GET /projects` | 14 ms |
+| Projects, user | `GET /projects?sort=lateTasks&order=desc` | 8 ms |
+| Projects, SuperAdmin (all 2,000) | `GET /projects` | 17 ms |
+| Projects, SuperAdmin | `?sort=lateTasks&order=desc` | 26 ms |
+| Projects, SuperAdmin | `?sort=percentDone&order=desc&page=10` | 16 ms |
+| Projects, SuperAdmin | `?sort=startDate&order=desc` | 39 ms |
+| Projects, SuperAdmin | `?lateOnly=true` | 20 ms |
+| Projects, SuperAdmin | `?q=riverside` | 8 ms |
+| Projects, SuperAdmin | `?sort=startDate&order=desc&pageSize=200` (worst case) | 89 ms |
+| Project tasks, 3,000 tasks | `GET /projects/PRJ-1770/tasks` | 7 ms |
+| Project tasks | `?sort=dependents&order=desc` | 9 ms |
+| Project tasks | `?blocked=true` | 7 ms |
+| Project tasks | `?late=true&sort=endDate` | 11 ms |
+| Project tasks | `?q=slab` | 11 ms |
+| Project tasks | `?from=2026-01-01&to=2026-03-01&page=2` | 9 ms |
+| Project tasks, mostly open | `GET /projects/PRJ-1970/tasks?blocked=true&sort=dependents&order=desc` | 13 ms |
+| Task details | `PRJ-1770-T-3000` (1,500 tasks upstream, 83 KB) | 9 ms |
+| Task details | `PRJ-1770-T-1500` | 7 ms |
+| Project store | `GET /projects/PRJ-1770/store?sort=lastDelivery&order=desc` | 2 ms |
+| Project store | `?q=cement&sort=quantity` | 2 ms |
+| Project deliveries | `GET /projects/PRJ-1770/deliveries` | 6 ms |
+| Project deliveries | `?direction=to_company&status=delivered` | 4 ms |
+| Project members | `GET /projects/PRJ-1770/members` | 2 ms |
+| Company stock (20,000 materials) | `GET /company-store/stock` | 33 ms |
+| Company stock | `?sort=status` | 29 ms |
+| Company stock | `?status=low_stock&category=Steel` | 22 ms |
+| Company stock | `?page=300` | 36 ms |
+| Company deliveries (400,000) | `GET /company-store/deliveries` | 25 ms |
+| Company deliveries | `?status=in_transit` | 8 ms |
+| Company deliveries | `?projectId=PRJ-1770` | 7 ms |
+| Company deliveries | `?from=2023-01-01&to=2023-01-31` | 8 ms |
+| Company deliveries | `?page=2000` | 31 ms |
 | Materials | `GET /materials?q=cement` | 8 ms |
 
-Everything a screen loads by default is under 100 ms. The slowest request I found is a SuperAdmin asking for 200 future projects at once, at about 230 ms, because every task in those projects is open and gets walked for the Blocked count.
+Everything a screen loads by default is under 100 ms. The slowest request I found is a SuperAdmin asking for 200 future projects at once, at about 90 ms, because every task in those projects is open and gets walked for the Blocked count.
 
 ## Trade-offs I accepted
 
@@ -222,6 +224,7 @@ Everything a screen loads by default is under 100 ms. The slowest request I foun
 ## What I would do with more time
 
 - Rate limiting on login and register.
+- Inviting by email answers differently for an unregistered email, so a project admin can learn whether an email has an account. Rate limiting would slow that down, and a real product would send an email invite instead.
 - An audit log of stock additions, so the company store's history is as complete as the deliveries.
 - Cursor pagination for the deliveries screens.
 - Cache the Blocked count per project if SuperAdmins often ask for very large pages.

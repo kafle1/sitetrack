@@ -1,9 +1,8 @@
 import type { FastifyInstance } from 'fastify';
-import { pagedRows, pool } from '../db';
+import { likePattern, pagedRows, pool } from '../db';
 import { projectAccess, requireCompanyStore } from '../access';
 import { notFound } from '../errors';
-import { dateTime, errorBody, idIn, int, nullable, num, obj, pageOf, pageQuery, paged, str, strEnum } from '../schemas';
-import { likePattern } from './materials';
+import { dateTime, errorBody, idIn, int, nullable, num, obj, order, pageQuery, paged, projectIdParam, quantity, str, strEnum } from '../schemas';
 
 const STOCK_STATUSES = ['out_of_stock', 'low_stock', 'available'];
 
@@ -38,7 +37,7 @@ const listProps = (sorts: Record<string, string>) => ({
   q: { type: 'string', maxLength: 200 },
   category: { type: 'string', maxLength: 100 },
   sort: { ...strEnum(Object.keys(sorts)), default: 'name' },
-  order: { ...strEnum(['asc', 'desc']), default: 'asc' },
+  order,
 });
 
 export default async function storeRoutes(app: FastifyInstance) {
@@ -56,7 +55,6 @@ export default async function storeRoutes(app: FastifyInstance) {
     async (req) => {
       requireCompanyStore(req.user);
       const { q, category, status, sort, order } = req.query;
-      const { limit, offset } = pageOf(req.query);
       const params: unknown[] = [];
       const where: string[] = [];
       if (q?.trim()) where.push(`name ILIKE $${params.push(likePattern(q))}`);
@@ -68,11 +66,10 @@ export default async function storeRoutes(app: FastifyInstance) {
              CASE WHEN s.quantity = 0 THEN 0 WHEN s.quantity <= s.reorder_point THEN 1 ELSE 2 END AS status_rank
            FROM materials m JOIN company_stock s ON s.material_id = m.id
          ) x ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
-         ORDER BY ${COMPANY_SORTS[sort]} ${order === 'desc' ? 'DESC' : 'ASC'}, name, id
+         ORDER BY ${COMPANY_SORTS[sort]} ${order.toUpperCase()}, name, id
 `,
         params,
-        limit,
-        offset,
+        req.query,
       );
       // in-transit totals only for the rows on this page
       const { rows: transit } = await pool.query(
@@ -100,13 +97,15 @@ export default async function storeRoutes(app: FastifyInstance) {
     },
   );
 
-  const stockRow = async (materialId: number) => {
+  // every material has a company stock row, so a plain UPDATE finds it or the material is gone
+  const updateStock = async (set: string, materialId: number, value: number) => {
     const { rows } = await pool.query(
-      `SELECT m.id, m.name, m.category, m.unit, s.quantity, s.reorder_point FROM materials m JOIN company_stock s ON s.material_id = m.id WHERE m.id = $1`,
-      [materialId],
+      `UPDATE company_stock s SET ${set} FROM materials m WHERE m.id = s.material_id AND s.material_id = $1
+       RETURNING m.id AS "materialId", m.name, m.unit, s.quantity, s.reorder_point AS "reorderPoint"`,
+      [materialId, value],
     );
-    const r = rows[0];
-    return { materialId: r.id, name: r.name, unit: r.unit, quantity: r.quantity, reorderPoint: r.reorder_point };
+    if (!rows[0]) throw notFound('Material not found');
+    return rows[0];
   };
   const stockResponse = obj({ materialId: int, name: str, unit: str, quantity: num, reorderPoint: num });
 
@@ -117,20 +116,13 @@ export default async function storeRoutes(app: FastifyInstance) {
         tags: ['company store'],
         summary: 'Add stock that arrived from a supplier (company store managers and SuperAdmins)',
         params: obj({ materialId: idIn }),
-        body: obj({ quantity: { type: 'number', exclusiveMinimum: 0, maximum: 1e9, multipleOf: 0.001 } }),
+        body: obj({ quantity }),
         response: { 200: stockResponse, 403: errorBody, 404: errorBody },
       },
     },
     async (req) => {
       requireCompanyStore(req.user);
-      // one statement, so it either fully applies or not at all
-      const { rowCount } = await pool.query(
-        `INSERT INTO company_stock (material_id, quantity) SELECT id, $2 FROM materials WHERE id = $1
-         ON CONFLICT (material_id) DO UPDATE SET quantity = company_stock.quantity + EXCLUDED.quantity`,
-        [req.params.materialId, req.body.quantity],
-      );
-      if (!rowCount) throw notFound('Material not found');
-      return stockRow(req.params.materialId);
+      return updateStock('quantity = s.quantity + $2', req.params.materialId, req.body.quantity);
     },
   );
 
@@ -141,19 +133,13 @@ export default async function storeRoutes(app: FastifyInstance) {
         tags: ['company store'],
         summary: 'Set the reorder point for a material (company store managers and SuperAdmins)',
         params: obj({ materialId: idIn }),
-        body: obj({ reorderPoint: { type: 'number', minimum: 0, maximum: 1e9, multipleOf: 0.001 } }),
+        body: obj({ reorderPoint: { ...quantity, minimum: 0 } }),
         response: { 200: stockResponse, 403: errorBody, 404: errorBody },
       },
     },
     async (req) => {
       requireCompanyStore(req.user);
-      const { rowCount } = await pool.query(
-        `INSERT INTO company_stock (material_id, reorder_point) SELECT id, $2 FROM materials WHERE id = $1
-         ON CONFLICT (material_id) DO UPDATE SET reorder_point = EXCLUDED.reorder_point`,
-        [req.params.materialId, req.body.reorderPoint],
-      );
-      if (!rowCount) throw notFound('Material not found');
-      return stockRow(req.params.materialId);
+      return updateStock('reorder_point = $2', req.params.materialId, req.body.reorderPoint);
     },
   );
 
@@ -163,7 +149,7 @@ export default async function storeRoutes(app: FastifyInstance) {
       schema: {
         tags: ['project store'],
         summary: 'Project store screen: every material the store has held',
-        params: obj({ projectId: { type: 'string', example: 'PRJ-0042' } }),
+        params: projectIdParam(),
         querystring: { type: 'object', properties: listProps(PROJECT_SORTS) },
         response: { 200: paged(projectItem), 404: errorBody },
       },
@@ -171,7 +157,6 @@ export default async function storeRoutes(app: FastifyInstance) {
     async (req) => {
       const { projectId } = await projectAccess(pool, req.user, req.params.projectId);
       const { q, category, sort, order } = req.query;
-      const { limit, offset } = pageOf(req.query);
       const params: unknown[] = [projectId];
       const where = ['s.project_id = $1'];
       if (q?.trim()) where.push(`m.name ILIKE $${params.push(likePattern(q))}`);
@@ -183,8 +168,7 @@ export default async function storeRoutes(app: FastifyInstance) {
          ORDER BY ${PROJECT_SORTS[sort]} ${order === 'desc' ? 'DESC NULLS LAST' : 'ASC NULLS FIRST'}, m.name, m.id
 `,
         params,
-        limit,
-        offset,
+        req.query,
       );
       return {
         items: rows.map((r) => ({

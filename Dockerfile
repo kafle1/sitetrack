@@ -11,7 +11,6 @@ WORKDIR /app
 ENV NODE_ENV=production
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
-COPY package.json ./
 COPY migrations ./migrations
 EXPOSE 8080
 CMD ["node", "dist/server.js"]

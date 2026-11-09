@@ -1,11 +1,12 @@
 import type { FastifyInstance } from 'fastify';
 import { pool } from '../db';
-import { createSession, hashPassword, refreshSession, revokeSession, verifyLogin } from '../auth';
+import { ROLES, createSession, hashPassword, refreshSession, revokeSession, verifyLogin } from '../auth';
 import { HttpError, conflict } from '../errors';
 import { errorBody, int, obj, ok, str, strEnum, text } from '../schemas';
+import { unreadCount } from './members';
 
 const tokens = obj({ accessToken: str, refreshToken: str, expiresIn: int });
-const me = obj({ id: int, name: str, email: str, role: strEnum(['user', 'store_manager', 'superadmin']), unreadNotifications: int });
+const me = obj({ id: int, name: str, email: str, role: strEnum(ROLES), unreadNotifications: int });
 
 export default async function authRoutes(app: FastifyInstance) {
   app.post<{ Body: { name: string; email: string; password: string; role: string } }>(
@@ -20,7 +21,7 @@ export default async function authRoutes(app: FastifyInstance) {
           name: text(200),
           email: { type: 'string', format: 'email', maxLength: 320 },
           password: { type: 'string', minLength: 8, maxLength: 200 },
-          role: strEnum(['user', 'store_manager', 'superadmin']),
+          role: strEnum(ROLES),
         }),
         response: { 201: tokens, 409: errorBody },
       },
@@ -34,7 +35,7 @@ export default async function authRoutes(app: FastifyInstance) {
         [name.trim(), email.trim(), hash, role],
       );
       if (!rows[0]) throw conflict('email_taken', 'That email is already registered');
-      return reply.status(201).send(await createSession(Number(rows[0].id)));
+      return reply.status(201).send(await createSession(rows[0].id));
     },
   );
 
@@ -84,11 +85,7 @@ export default async function authRoutes(app: FastifyInstance) {
   );
 
   app.get('/me', { schema: { tags: ['auth'], summary: 'My profile and unread notification count', response: { 200: me } } }, async (req) => {
-    const { rows } = await pool.query(
-      `SELECT count(*)::int AS n FROM invitations WHERE user_id = $1 AND read_at IS NULL AND status <> 'withdrawn'`,
-      [req.user.id],
-    );
     const { id, name, email, role } = req.user;
-    return { id, name, email, role, unreadNotifications: rows[0].n };
+    return { id, name, email, role, unreadNotifications: await unreadCount(id) };
   });
 }

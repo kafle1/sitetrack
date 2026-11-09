@@ -41,9 +41,7 @@ export async function addStock(c: PoolClient, store: Store, lines: Line[]) {
   const qty = lines.map((l) => l.quantity);
   if (store === null)
     await c.query(
-      `INSERT INTO company_stock (material_id, quantity)
-       SELECT id, qty FROM unnest($1::int[], $2::numeric[]) AS l(id, qty) ORDER BY id
-       ON CONFLICT (material_id) DO UPDATE SET quantity = company_stock.quantity + EXCLUDED.quantity`,
+      `UPDATE company_stock s SET quantity = s.quantity + l.qty FROM unnest($1::int[], $2::numeric[]) AS l(id, qty) WHERE s.material_id = l.id`,
       [ids, qty],
     );
   else
@@ -54,4 +52,11 @@ export async function addStock(c: PoolClient, store: Store, lines: Line[]) {
        SET quantity = project_stock.quantity + EXCLUDED.quantity, last_delivery_at = now()`,
       [ids, qty, store],
     );
+}
+
+export async function insertLines(c: PoolClient, deliveryId: number, lines: Line[]) {
+  await c.query(
+    `INSERT INTO delivery_lines (delivery_id, material_id, quantity) SELECT $1, id, qty FROM unnest($2::int[], $3::numeric[]) AS l(id, qty)`,
+    [deliveryId, lines.map((l) => l.materialId), lines.map((l) => l.quantity)],
+  );
 }

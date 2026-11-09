@@ -1,8 +1,8 @@
 import type { FastifyInstance } from 'fastify';
-import { pool, tx } from '../db';
+import { likePattern, pagedRows, pool, tx, type PageQuery } from '../db';
 import { requireCompanyStore } from '../access';
 import { conflict, notFound } from '../errors';
-import { arr, errorBody, idIn, int, obj, ok, pageOf, pageQuery, paged, str, text } from '../schemas';
+import { arr, errorBody, idIn, int, obj, ok, pageQuery, paged, str, text } from '../schemas';
 
 const material = obj({ id: int, name: str, category: str, unit: str });
 const body = {
@@ -11,10 +11,8 @@ const body = {
   unit: text(30),
 };
 
-export const likePattern = (q: string) => `%${q.trim().replace(/[\\%_]/g, '\\$&')}%`;
-
 export default async function materialRoutes(app: FastifyInstance) {
-  app.get<{ Querystring: { page: number; pageSize: number; q?: string; category?: string } }>(
+  app.get<{ Querystring: PageQuery & { q?: string; category?: string } }>(
     '/materials',
     {
       schema: {
@@ -29,17 +27,17 @@ export default async function materialRoutes(app: FastifyInstance) {
     },
     async (req) => {
       const { q, category } = req.query;
-      const { limit, offset } = pageOf(req.query);
       const params: unknown[] = [];
       const where: string[] = [];
       if (q?.trim()) where.push(`name ILIKE $${params.push(likePattern(q))}`);
       if (category) where.push(`category = $${params.push(category)}`);
-      const w = where.length ? 'WHERE ' + where.join(' AND ') : '';
-      const [list, count] = await Promise.all([
-        pool.query(`SELECT id, name, category, unit FROM materials ${w} ORDER BY name, id LIMIT ${limit} OFFSET ${offset}`, params),
-        pool.query(`SELECT count(*)::int AS n FROM materials ${w}`, params),
-      ]);
-      return { items: list.rows, page: req.query.page, pageSize: req.query.pageSize, total: count.rows[0].n };
+      const { rows, total } = await pagedRows(
+        `SELECT id, name, category, unit, count(*) OVER () AS total_count FROM materials
+         ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY name, id`,
+        params,
+        req.query,
+      );
+      return { items: rows, page: req.query.page, pageSize: req.query.pageSize, total };
     },
   );
 

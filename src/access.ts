@@ -5,7 +5,6 @@ import { parseProjectId } from './ids';
 
 export interface ProjectAccess {
   projectId: number;
-  isMember: boolean;
   isAdmin: boolean;
 }
 
@@ -24,11 +23,11 @@ export async function projectAccess(db: Db, user: AuthUser, projectParam: string
     [projectId, user.id],
   );
   const row = rows[0];
-  const isMember = row?.is_admin !== undefined && row?.is_admin !== null;
-  if (user.role === 'superadmin' && row) return { projectId, isMember, isAdmin: true };
+  const isMember = row?.is_admin != null;
+  if (user.role === 'superadmin' && row) return { projectId, isAdmin: true };
   // a non-member gets the exact same answer as a project that does not exist
   if (!isMember) throw notFound(PROJECT_NOT_FOUND);
-  return { projectId, isMember, isAdmin: row.is_admin };
+  return { projectId, isAdmin: row.is_admin };
 }
 
 export async function projectAdmin(db: Db, user: AuthUser, projectParam: string, lock = false) {

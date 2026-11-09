@@ -1,12 +1,10 @@
 import type { FastifyInstance } from 'fastify';
 import type { PoolClient } from 'pg';
-import { pool, tx } from '../db';
+import { pagedRows, pool, tx, type PageQuery } from '../db';
 import { projectAccess, projectAdmin } from '../access';
 import { conflict, forbidden, notFound } from '../errors';
 import { projectCode } from '../ids';
-import { arr, bool, dateTime, errorBody, idIn, int, nullable, obj, ok, pageOf, pageQuery, str, strEnum, userRef } from '../schemas';
-
-const projectParams = obj({ projectId: { type: 'string', example: 'PRJ-0042' } });
+import { arr, bool, dateTime, errorBody, idIn, int, nullable, obj, ok, pageQuery, projectIdParam, ref, str, strEnum, userRef } from '../schemas';
 
 const member = obj({ userId: int, name: str, email: str, isAdmin: bool, joinedAt: dateTime });
 const pendingInvitation = obj({ id: int, user: obj({ id: int, name: str, email: str }), invitedBy: userRef, createdAt: dateTime });
@@ -40,10 +38,18 @@ async function membersOf(projectId: number) {
     invitations: i.rows.map((r) => ({
       id: r.id,
       user: { id: r.user_id, name: r.name, email: r.email },
-      invitedBy: r.by_id ? { id: r.by_id, name: r.by_name } : null,
+      invitedBy: ref(r.by_id, r.by_name),
       createdAt: r.created_at,
     })),
   };
+}
+
+export async function unreadCount(userId: number) {
+  const { rows } = await pool.query(
+    `SELECT count(*)::int AS n FROM invitations WHERE user_id = $1 AND read_at IS NULL AND status <> 'withdrawn'`,
+    [userId],
+  );
+  return rows[0].n as number;
 }
 
 const membersResponse = obj({ members: arr(member), invitations: arr(pendingInvitation) });
@@ -55,7 +61,7 @@ export default async function memberRoutes(app: FastifyInstance) {
       schema: {
         tags: ['members'],
         summary: 'Members screen: members (admins first) and invitations not yet answered',
-        params: projectParams,
+        params: projectIdParam(),
         response: { 200: membersResponse, 404: errorBody },
       },
     },
@@ -71,7 +77,7 @@ export default async function memberRoutes(app: FastifyInstance) {
       schema: {
         tags: ['members'],
         summary: 'Invite a registered user by email (project admins)',
-        params: projectParams,
+        params: projectIdParam(),
         body: obj({ email: { type: 'string', maxLength: 320 } }),
         response: { 201: membersResponse, 403: errorBody, 404: errorBody, 409: errorBody },
       },
@@ -100,7 +106,7 @@ export default async function memberRoutes(app: FastifyInstance) {
       schema: {
         tags: ['members'],
         summary: 'Withdraw an invitation that has not been answered (project admins)',
-        params: obj({ projectId: str, invitationId: idIn }),
+        params: projectIdParam({ invitationId: idIn }),
         response: { 200: membersResponse, 403: errorBody, 404: errorBody },
       },
     },
@@ -125,7 +131,7 @@ export default async function memberRoutes(app: FastifyInstance) {
         tags: ['members'],
         summary: 'Make a member a project admin, or take admin away (project admins)',
         description: 'Taking admin from the last project admin is refused with 409.',
-        params: obj({ projectId: str, userId: idIn }),
+        params: projectIdParam({ userId: idIn }),
         body: obj({ isAdmin: bool }),
         response: { 200: membersResponse, 403: errorBody, 404: errorBody, 409: errorBody },
       },
@@ -154,7 +160,7 @@ export default async function memberRoutes(app: FastifyInstance) {
         tags: ['members'],
         summary: 'Remove a member (project admins), or leave the project yourself',
         description: 'Removing the last project admin is refused with 409. The removed person loses access on their next request.',
-        params: obj({ projectId: str, userId: idIn }),
+        params: projectIdParam({ userId: idIn }),
         response: { 200: ok, 403: errorBody, 404: errorBody, 409: errorBody },
       },
     },
@@ -173,7 +179,7 @@ export default async function memberRoutes(app: FastifyInstance) {
     },
   );
 
-  app.get<{ Querystring: { page: number; pageSize: number } }>(
+  app.get<{ Querystring: PageQuery }>(
     '/notifications',
     {
       schema: {
@@ -184,37 +190,33 @@ export default async function memberRoutes(app: FastifyInstance) {
       },
     },
     async (req) => {
-      const { limit, offset } = pageOf(req.query);
-      const [list, counts] = await Promise.all([
-        pool.query(
+      const [{ rows, total }, unread] = await Promise.all([
+        pagedRows(
           `SELECT i.id, i.status, i.read_at, i.created_at, i.answered_at, p.id AS project_id, p.name AS project_name,
-             b.id AS by_id, b.name AS by_name
+             b.id AS by_id, b.name AS by_name, count(*) OVER () AS total_count
            FROM invitations i LEFT JOIN projects p ON p.id = i.project_id LEFT JOIN users b ON b.id = i.invited_by
            WHERE i.user_id = $1 AND i.status <> 'withdrawn'
-           ORDER BY i.created_at DESC, i.id DESC LIMIT $2 OFFSET $3`,
-          [req.user.id, limit, offset],
-        ),
-        pool.query(
-          `SELECT count(*)::int AS total, count(*) FILTER (WHERE read_at IS NULL)::int AS unread
-           FROM invitations WHERE user_id = $1 AND status <> 'withdrawn'`,
+           ORDER BY i.created_at DESC, i.id DESC`,
           [req.user.id],
+          req.query,
         ),
+        unreadCount(req.user.id),
       ]);
       return {
-        items: list.rows.map((r) => ({
+        items: rows.map((r) => ({
           id: r.id,
           type: 'project_invitation',
           project: r.project_id ? { id: projectCode(r.project_id), name: r.project_name } : null,
-          invitedBy: r.by_id ? { id: r.by_id, name: r.by_name } : null,
+          invitedBy: ref(r.by_id, r.by_name),
           status: r.status,
           read: r.read_at !== null,
           createdAt: r.created_at,
           answeredAt: r.answered_at,
         })),
-        unreadCount: counts.rows[0].unread,
+        unreadCount: unread,
         page: req.query.page,
         pageSize: req.query.pageSize,
-        total: counts.rows[0].total,
+        total,
       };
     },
   );
@@ -222,13 +224,7 @@ export default async function memberRoutes(app: FastifyInstance) {
   app.get(
     '/notifications/unread-count',
     { schema: { tags: ['notifications'], summary: 'Unread notification count, for the badge on every page', response: { 200: obj({ unreadCount: int }) } } },
-    async (req) => {
-      const { rows } = await pool.query(
-        `SELECT count(*)::int AS n FROM invitations WHERE user_id = $1 AND read_at IS NULL AND status <> 'withdrawn'`,
-        [req.user.id],
-      );
-      return { unreadCount: rows[0].n };
-    },
+    async (req) => ({ unreadCount: await unreadCount(req.user.id) }),
   );
 
   app.post<{ Body: { ids?: number[] } }>(
@@ -247,11 +243,7 @@ export default async function memberRoutes(app: FastifyInstance) {
         `UPDATE invitations SET read_at = now() WHERE user_id = $1 AND read_at IS NULL ${ids ? 'AND id = ANY($2)' : ''}`,
         ids ? [req.user.id, ids] : [req.user.id],
       );
-      const { rows } = await pool.query(
-        `SELECT count(*)::int AS n FROM invitations WHERE user_id = $1 AND read_at IS NULL AND status <> 'withdrawn'`,
-        [req.user.id],
-      );
-      return { unreadCount: rows[0].n };
+      return { unreadCount: await unreadCount(req.user.id) };
     },
   );
 

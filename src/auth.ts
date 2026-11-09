@@ -7,11 +7,13 @@ import { HttpError } from './errors';
 
 const scrypt = promisify(crypto.scrypt) as (pw: string, salt: Buffer, len: number) => Promise<Buffer>;
 
-export const JWT_SECRET = process.env.JWT_SECRET ?? 'dev-secret';
-export const ACCESS_TTL_SECONDS = 15 * 60;
-export const SESSION_TTL_DAYS = 30;
+if (!process.env.JWT_SECRET) throw new Error('JWT_SECRET is not set');
+const JWT_SECRET = process.env.JWT_SECRET;
+const ACCESS_TTL_SECONDS = 15 * 60;
+const SESSION_TTL_DAYS = 30;
 
-export type Role = 'user' | 'store_manager' | 'superadmin';
+export const ROLES = ['user', 'store_manager', 'superadmin'] as const;
+export type Role = (typeof ROLES)[number];
 export interface AuthUser {
   id: number;
   name: string;
@@ -86,7 +88,7 @@ export async function refreshSession(refreshToken: string) {
     await pool.query('UPDATE sessions SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL', [sessionId]);
     throw unauthorized();
   }
-  return tokensFor(Number(rows[0].user_id), sessionId, next);
+  return tokensFor(rows[0].user_id, sessionId, next);
 }
 
 export async function revokeSession(sessionId: string) {
