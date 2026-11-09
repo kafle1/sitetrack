@@ -84,22 +84,20 @@ export default async function projectRoutes(app: FastifyInstance) {
           : `project_members pm JOIN projects p ON p.id = pm.project_id AND pm.user_id = $1`;
       const sql = `
         WITH acc AS (
-          SELECT p.id, p.name, p.planned_start, p.planned_end, coalesce(pm.is_admin, false) AS is_admin
+          SELECT p.id, p.name, p.planned_start, p.planned_end, p.task_total, p.task_done, coalesce(pm.is_admin, false) AS is_admin
           FROM ${from} ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
-        ), stats AS (
+        ), open AS (
           SELECT t.project_id,
-            count(*) AS total,
             count(*) FILTER (WHERE t.status = 'not_started') AS not_started,
             count(*) FILTER (WHERE t.status = 'in_progress') AS in_progress,
-            count(*) FILTER (WHERE t.status = 'done') AS done,
             count(*) FILTER (WHERE ${LATE_SQL('t')}) AS late
-          FROM tasks t WHERE t.project_id IN (SELECT id FROM acc)
+          FROM tasks t WHERE t.status <> 'done' AND t.project_id IN (SELECT id FROM acc)
           GROUP BY t.project_id
         ), rows AS (
-          SELECT acc.*, coalesce(s.total, 0) AS total, coalesce(s.not_started, 0) AS not_started,
-            coalesce(s.in_progress, 0) AS in_progress, coalesce(s.done, 0) AS done, coalesce(s.late, 0) AS late,
-            CASE WHEN coalesce(s.total, 0) = 0 THEN 0 ELSE round(s.done * 100.0 / s.total, 1) END AS percent_done
-          FROM acc LEFT JOIN stats s ON s.project_id = acc.id
+          SELECT acc.*, acc.task_total AS total, acc.task_done AS done, coalesce(s.not_started, 0) AS not_started,
+            coalesce(s.in_progress, 0) AS in_progress, coalesce(s.late, 0) AS late,
+            CASE WHEN acc.task_total = 0 THEN 0 ELSE round(acc.task_done * 100.0 / acc.task_total, 1) END AS percent_done
+          FROM acc LEFT JOIN open s ON s.project_id = acc.id
           ${lateOnly ? 'WHERE coalesce(s.late, 0) > 0' : ''}
         )
         SELECT rows.*, count(*) OVER () AS total_count,
@@ -233,14 +231,13 @@ async function projectDetail(projectId: number, userId: number) {
     `SELECT p.id, p.name, p.planned_start, p.planned_end,
        coalesce((SELECT is_admin FROM project_members WHERE project_id = p.id AND user_id = $2), false) AS is_admin,
        (SELECT count(*) FROM project_members WHERE project_id = p.id) AS member_count,
-       s.*
+       p.task_total AS total, p.task_done AS done, s.*
      FROM projects p,
-     LATERAL (SELECT count(*) AS total,
+     LATERAL (SELECT
        count(*) FILTER (WHERE t.status = 'not_started') AS not_started,
        count(*) FILTER (WHERE t.status = 'in_progress') AS in_progress,
-       count(*) FILTER (WHERE t.status = 'done') AS done,
        count(*) FILTER (WHERE ${LATE_SQL('t')}) AS late
-       FROM tasks t WHERE t.project_id = p.id) s
+       FROM tasks t WHERE t.project_id = p.id AND t.status <> 'done') s
      WHERE p.id = $1`,
     [projectId, userId],
   );

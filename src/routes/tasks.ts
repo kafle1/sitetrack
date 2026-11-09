@@ -188,7 +188,7 @@ export default async function taskRoutes(app: FastifyInstance) {
       if (from) add((p) => `planned_end >= ${p}::date`, from);
       if (to) add((p) => `planned_start <= ${p}::date`, to);
       const sql = `
-        WITH RECURSIVE ${waitingCte('d.project_id = $1')},
+        WITH RECURSIVE ${waitingCte('u.project_id = $1')},
         dependents AS (
           SELECT depends_on_id AS id, count(*)::int AS n FROM task_dependencies WHERE project_id = $1 GROUP BY depends_on_id
         ), rows AS (
@@ -246,7 +246,7 @@ export default async function taskRoutes(app: FastifyInstance) {
       checkDates(plannedStart, plannedEnd);
       const number = await tx(async (c) => {
         // the counter row lock makes concurrent creates in one project queue up, so numbers never collide
-        const { rows } = await c.query('UPDATE projects SET task_counter = task_counter + 1 WHERE id = $1 RETURNING task_counter', [projectId]);
+        const { rows } = await c.query('UPDATE projects SET task_counter = task_counter + 1, task_total = task_total + 1 WHERE id = $1 RETURNING task_counter', [projectId]);
         await c.query(
           'INSERT INTO tasks (project_id, number, name, planned_start, planned_end) VALUES ($1, $2, $3, $4, $5)',
           [projectId, rows[0].task_counter, name.trim(), plannedStart, plannedEnd],
@@ -318,6 +318,10 @@ export default async function taskRoutes(app: FastifyInstance) {
         await lockProject(c, projectId);
         const task = await findTask(c, projectId, req.params.taskId);
         await c.query('DELETE FROM tasks WHERE id = $1', [task.id]);
+        await c.query('UPDATE projects SET task_total = task_total - 1, task_done = task_done - $2 WHERE id = $1', [
+          projectId,
+          task.status === 'done' ? 1 : 0,
+        ]);
       });
       return { ok: true };
     },
@@ -335,6 +339,7 @@ export default async function taskRoutes(app: FastifyInstance) {
     if (action === 'reopen' && (await c.query(startedDownstreamSql, [task.id])).rows[0].n > 0)
       throw conflict('dependents_started', 'A task that waits on this one has already started');
     await c.query('UPDATE tasks SET status = $2 WHERE id = $1', [task.id, to]);
+    if (action !== 'start') await c.query('UPDATE projects SET task_done = task_done + $2 WHERE id = $1', [projectId, action === 'done' ? 1 : -1]);
   };
 
   for (const action of ACTIONS) {

@@ -7,16 +7,17 @@ export const LATE_SQL = (t: string) =>
 // Starting from not-done tasks (not from direct deps) matters: a Done task can still sit on a not-done upstream.
 export const waitingCte = (projectFilter: string) => `
   waiting(id) AS (
-    SELECT d.task_id FROM task_dependencies d JOIN tasks u ON u.id = d.depends_on_id
+    SELECT d.task_id FROM tasks u JOIN task_dependencies d ON d.depends_on_id = u.id
     WHERE ${projectFilter} AND u.status <> 'done'
     UNION
     SELECT d.task_id FROM waiting w JOIN task_dependencies d ON d.depends_on_id = w.id
   )`;
 
 export const blockedCountsSql = `
-  WITH RECURSIVE ${waitingCte('d.project_id = ANY($1)')}
-  SELECT t.project_id, count(*)::int AS n FROM waiting w JOIN tasks t ON t.id = w.id
-  WHERE t.status <> 'done' GROUP BY t.project_id`;
+  WITH RECURSIVE ${waitingCte('u.project_id = ANY($1)')}
+  SELECT t.project_id, count(*)::int AS n FROM tasks t
+  WHERE t.project_id = ANY($1) AND t.status <> 'done' AND t.id IN (SELECT id FROM waiting)
+  GROUP BY t.project_id`;
 
 // every task this one waits on, directly or not, that is still not done
 export const notDoneUpstreamSql = `
