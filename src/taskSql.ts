@@ -10,7 +10,9 @@ export const waitingCte = (projectFilter: string) => `
     SELECT d.task_id FROM tasks u JOIN task_dependencies d ON d.depends_on_id = u.id
     WHERE ${projectFilter} AND u.status <> 'done'
     UNION
-    SELECT d.task_id FROM waiting w JOIN task_dependencies d ON d.depends_on_id = w.id
+    -- OFFSET 0 keeps this a per-row index lookup; the planner otherwise guesses big and scans all 1M links each step
+    SELECT x.task_id FROM waiting w
+    CROSS JOIN LATERAL (SELECT d.task_id FROM task_dependencies d WHERE d.depends_on_id = w.id OFFSET 0) x
   )`;
 
 export const blockedCountsSql = `

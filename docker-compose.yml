@@ -5,7 +5,7 @@ services:
       POSTGRES_USER: sitetrack
       POSTGRES_PASSWORD: sitetrack
       POSTGRES_DB: sitetrack
-    command: postgres -c shared_buffers=512MB -c work_mem=16MB -c maintenance_work_mem=256MB -c random_page_cost=1.1 -c effective_cache_size=2GB
+    command: postgres -c shared_buffers=512MB -c work_mem=16MB -c maintenance_work_mem=256MB -c random_page_cost=1.1 -c effective_cache_size=2GB -c jit=off
     ports:
       - "54330:5432"
     volumes:
