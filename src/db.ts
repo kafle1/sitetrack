@@ -10,6 +10,9 @@ export const pool = new pg.Pool({
   max: Number(process.env.DB_POOL_SIZE ?? 20),
 });
 
+// an idle connection dropped by a database restart must not crash the API
+pool.on('error', (e) => console.error('idle database connection error', e.message));
+
 export type Db = pg.Pool | pg.PoolClient;
 
 // for list queries that select count(*) OVER () AS total_count; a page past the end asks once more for the total
