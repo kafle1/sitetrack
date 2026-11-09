@@ -232,7 +232,7 @@ export default async function memberRoutes(app: FastifyInstance) {
     {
       schema: {
         tags: ['notifications'],
-        summary: 'Mark notifications as read: the listed ids, or all of them when ids is left out',
+        summary: 'Mark notifications as read: send { "ids": [...] } for some, or {} for all of them',
         body: { type: 'object', properties: { ids: { type: 'array', items: int, maxItems: 500 } } },
         response: { 200: obj({ unreadCount: int }) },
       },
