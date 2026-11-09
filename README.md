@@ -94,7 +94,7 @@ Logging in creates a session row and returns two tokens. The access token is a J
 
 ### Access checks
 
-The app role comes from the session lookup and the project membership comes from a fresh query, both on every request. Nothing about access is cached in the token. That is what makes a removal or an admin change bite on the very next request. Anything inside a project you can't access answers `404 Project not found`, word for word the same as an ID that doesn't exist. Lists are built from the caller's memberships, so they never include projects the caller can't see. Inside a project you are a member of, trying an admin-only action gives `403`, because there the project's existence is no secret.
+The app role comes from the session lookup and the project membership comes from a fresh query, both on every request. Nothing about access is cached in the token. That is what makes a removal or an admin change bite on the very next request. Anything inside a project you can't access answers `404 Project not found`, word for word the same as an ID that doesn't exist. Lists are built from the caller's memberships, so they never include projects the caller can't see. Inside a project you are a member of, trying an admin-only action gives `403`, because there the project's existence is no secret. Member changes read the caller's admin status under the project lock, so two admins demoting each other at the same moment can't both win.
 
 ### Roles
 

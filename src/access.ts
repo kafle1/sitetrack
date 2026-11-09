@@ -11,10 +11,12 @@ export interface ProjectAccess {
 
 const PROJECT_NOT_FOUND = 'Project not found';
 
-// read from the database on every request, so a removal or role change bites on the very next call
-export async function projectAccess(db: Db, user: AuthUser, projectParam: string): Promise<ProjectAccess> {
+// read from the database on every request, so a removal or role change bites on the very next call.
+// lock reads it under the project lock, so a member demoted or removed a moment ago can't still act.
+export async function projectAccess(db: Db, user: AuthUser, projectParam: string, lock = false): Promise<ProjectAccess> {
   const projectId = parseProjectId(projectParam);
   if (projectId === null) throw notFound(PROJECT_NOT_FOUND);
+  if (lock) await lockProject(db, projectId);
   const { rows } = await db.query(
     `SELECT pm.is_admin FROM projects p
      LEFT JOIN project_members pm ON pm.project_id = p.id AND pm.user_id = $2
@@ -29,8 +31,8 @@ export async function projectAccess(db: Db, user: AuthUser, projectParam: string
   return { projectId, isMember, isAdmin: row.is_admin };
 }
 
-export async function projectAdmin(db: Db, user: AuthUser, projectParam: string) {
-  const access = await projectAccess(db, user, projectParam);
+export async function projectAdmin(db: Db, user: AuthUser, projectParam: string, lock = false) {
+  const access = await projectAccess(db, user, projectParam, lock);
   if (!access.isAdmin) throw forbidden('Only project admins can do this');
   return access;
 }

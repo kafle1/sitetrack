@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { PoolClient } from 'pg';
 import { pool, tx } from '../db';
-import { lockProject, projectAccess, projectAdmin } from '../access';
+import { projectAccess, projectAdmin } from '../access';
 import { conflict, forbidden, notFound } from '../errors';
 import { projectCode } from '../ids';
 import { arr, bool, dateTime, errorBody, idIn, int, nullable, obj, ok, pageOf, pageQuery, str, strEnum, userRef } from '../schemas';
@@ -126,10 +126,9 @@ export default async function memberRoutes(app: FastifyInstance) {
       },
     },
     async (req) => {
-      const { projectId } = await projectAdmin(pool, req.user, req.params.projectId);
-      await tx(async (c) => {
-        // the lock stops two admins demoting each other at the same moment
-        await lockProject(c, projectId);
+      const projectId = await tx(async (c) => {
+        // checked under the lock, so two admins demoting each other at the same moment can't both pass
+        const { projectId } = await projectAdmin(c, req.user, req.params.projectId, true);
         const { rowCount } = await c.query('UPDATE project_members SET is_admin = $3 WHERE project_id = $1 AND user_id = $2', [
           projectId,
           req.params.userId,
@@ -137,6 +136,7 @@ export default async function memberRoutes(app: FastifyInstance) {
         ]);
         if (!rowCount) throw notFound('That person is not a member');
         await ensureAnAdmin(c, projectId);
+        return projectId;
       });
       return membersOf(projectId);
     },
@@ -154,10 +154,9 @@ export default async function memberRoutes(app: FastifyInstance) {
       },
     },
     async (req) => {
-      const access = await projectAccess(pool, req.user, req.params.projectId);
-      if (!access.isAdmin && req.params.userId !== req.user.id) throw forbidden('Only project admins can remove members');
       await tx(async (c) => {
-        await lockProject(c, access.projectId);
+        const access = await projectAccess(c, req.user, req.params.projectId, true);
+        if (!access.isAdmin && req.params.userId !== req.user.id) throw forbidden('Only project admins can remove members');
         const { rowCount } = await c.query('DELETE FROM project_members WHERE project_id = $1 AND user_id = $2', [
           access.projectId,
           req.params.userId,
